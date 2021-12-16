@@ -1,0 +1,27 @@
+{
+  "name": "drift-liquidation-bot",
+  "version": "1.0.0",
+  "description": "",
+  "exports": "./src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "node --loader ts-node/esm ./src/index.ts"
+  },
+  "author": "",
+  "engines": {
+    "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@drift-labs/sdk": "^0.1.11",
+    "@solana/web3.js": "^1.31.0",
+    "dotenv": "^10.0.0",
+    "node-localstorage": "^2.2.1",
+    "ora": "^6.0.1",
+    "ts-node": "^10.4.0"
+  },
+  "devDependencies": {
+    "tslint": "^5.12.1",
+    "typescript": "^3.9.10"
+  }
+}
