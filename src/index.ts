@@ -24,7 +24,7 @@ config({path: './.env.local'});
 // CONFIG THE LOOP
 
 // how many minutes will one loop last
-const liquidationLoopTimeInMinutes = 2
+const liquidationLoopTimeInMinutes = .5
 // update the liquidation distance of all users every X minutes
 const updateLiquidationDistanceInMinutes = 1
 // check users for liquidation every X milliseconds
@@ -118,7 +118,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
                     countSubscribed++
                     if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                        subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                        subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                         resolve(subscribeToUserAccounts(failedToSubscribe as [{ publicKey: string, authority: string }]))
                     }
                     return;
@@ -133,7 +133,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                             usersLiquidationDistance.set(pub.toBase58(), calcDistanceToLiq(marginRatio))
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                            subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                             resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                         }
                         
@@ -142,7 +142,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                             failedToSubscribe.push(programUserAccount)
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                            subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                             resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                         }
                     })
@@ -153,7 +153,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                     failedToSubscribe.push(programUserAccount)
                 }
                 if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                    subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                    subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                     resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                 }
                 
@@ -172,12 +172,12 @@ const getUsers = () => {
     return new Promise((resolve, reject) => {
         const programUserAccounts = localStorage.getItem('programUserAccounts')
         if (programUserAccounts !== undefined && programUserAccounts !== null) {
-            usersCheck.text = ('user accounts found in local storage')
+            usersCheck.text = ('User accounts found in local storage')
         } else {
-            usersCheck.text = ('no user accounts found in local storage')
+            usersCheck.text = ('No user accounts found in local storage')
         }
         clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
-            usersCheck.text = ('retrieved all users')
+            usersCheck.text = ('Retrieved all users')
             if (programUserAccounts !== undefined && programUserAccounts !== null) {
                 const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as [{ publicKey: string, authority: string}];
                 let existingUserAccountsLength = existingUserAccounts.length
@@ -189,15 +189,15 @@ const getUsers = () => {
                     }
                 })
                 localStorage.setItem('programUserAccounts', btoa(JSON.stringify(existingUserAccounts)))
-                usersCheck.succeed('updated existing ' + existingUserAccountsLength + ' user accounts with ' + newlyAddedCount + " new accounts.")
+                usersCheck.succeed('Updated existing ' + existingUserAccountsLength + ' user accounts with ' + newlyAddedCount + " new accounts.")
             } else {
                 localStorage.setItem('programUserAccounts', btoa(JSON.stringify(newProgramUserAccounts.map(userAccount => ({ publicKey: userAccount.publicKey.toBase58(), authority: userAccount.account.authority.toBase58() })))))
-                usersCheck.succeed('stored ' + newProgramUserAccounts.length + ' new accounts to localstorage');
+                usersCheck.succeed('Stored ' + newProgramUserAccounts.length + ' new accounts to localstorage');
             }
             resolve(JSON.parse(atob(localStorage.getItem('programUserAccounts')!)))
         }).catch(error => {
             console.error(error)
-            usersCheck.fail('failed to retreive all users')
+            usersCheck.fail('Failed to retreive all users')
         });
     })
     
@@ -282,7 +282,7 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
 
         // resolve current loop after 2 minutes
         setTimeout(() => {
-            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over . Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
+            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
             resolve(usersLiquidationDistance)
         }, 60 * 1000 * liquidationLoopTimeInMinutes)
         
