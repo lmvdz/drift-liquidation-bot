@@ -29,6 +29,9 @@ const liquidationLoopTimeInMinutes = .5
 const updateLiquidationDistanceInMinutes = 1
 // check users for liquidation every X milliseconds
 const checkUsersInMS = 5
+// only check users who's liquidation distance is less than X
+// liquidation distance is calculated using the calcDistanceToLiq function
+const minLiquidationDistance = 10
 
 
 const botKeyEnvVariable = "BOT_KEY"
@@ -210,7 +213,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
         const usersToCheck: Array<string> = usersSortedByLiquidationDistance()
         // map the users to check to their ClearingHouseUser
         // and filter out the high margin ratio users
-        const mappedUsers = usersToCheck.map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).filter(u => usersLiquidationDistance.get(u.publicKey) < 10)
+        const mappedUsers = usersToCheck.map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).filter(u => usersLiquidationDistance.get(u.publicKey) < minLiquidationDistance)
         // loop through each user and check for liquidation
         mappedUsers.forEach(({publicKey, user}, index) => {
             if (user) {
@@ -282,7 +285,7 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
 
         // resolve current loop after 2 minutes
         setTimeout(() => {
-            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
+            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\t Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
             resolve(usersLiquidationDistance)
         }, 60 * 1000 * liquidationLoopTimeInMinutes)
         
