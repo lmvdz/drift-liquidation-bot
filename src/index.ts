@@ -17,19 +17,19 @@ const localStorage = new LocalStorage('./storage');
 import { config } from 'dotenv';
 config({path: './.env.local'});
 const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/")
-const privateKey = process.env.BOT_KEY
+const botKey = process.env.BOT_KEY
 
-if (privateKey === undefined) {
+if (botKey === undefined) {
     console.error('need a BOT_KEY env variable');
     process.exit()
 }
 
 const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
 const keypair = Keypair.fromSecretKey(
-    from_b58(privateKey, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")!
+    from_b58(botKey, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")!
 );
-const privateWallet = new Wallet(keypair);
-const provider = new Provider(mainnetConnection, privateWallet, Provider.defaultOptions());
+const botWallet = new Wallet(keypair);
+const provider = new Provider(mainnetConnection, botWallet, Provider.defaultOptions());
 
 const clearingHouse = ClearingHouse.from(
     mainnetConnection,
