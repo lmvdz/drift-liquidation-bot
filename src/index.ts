@@ -10,6 +10,8 @@ import {
 	DriftEnv
 } from '@drift-labs/sdk';
 import { from_b58 } from "./util/base56.js"
+import { btoa } from "./util/btoa.js"
+import { atob } from "./util/atob.js"
 import { LocalStorage } from 'node-localstorage'
 import ora from 'ora'
 const localStorage = new LocalStorage('./storage');
@@ -57,11 +59,15 @@ const liq = (pub:PublicKey, user:ClearingHouseUser) => {
         liqSpinner.fail(error)
     });
 }
-
+// divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
+// use div and mod to get the decimal values
 const calcDistanceToLiq = (marginRatio) => {
     return marginRatio.div(PARTIAL_LIQUIDATION_RATIO).toNumber() + marginRatio.mod(PARTIAL_LIQUIDATION_RATIO).toNumber()
 }
 
+
+// subscribe to all the users and check if they can be liquidated
+// users which are already subscribed to will be ignored
 const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, authority: string }]) => {
     const subscribingUserAccountsORA = ora('subscribing users').start()
     return new Promise((resolve, reject) => {
@@ -122,13 +128,11 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
         })
     })
 };
-const btoa = (text) => {
-    return Buffer.from(text, 'binary').toString('base64');
-};
-const atob = (base64) => {
-    return Buffer.from(base64, 'base64').toString('binary');
-};
 
+
+// get all the users from the program and the storage
+// add the new users to the storage
+// maybe one day only request users which are not in storage
 const getUsers = () => {
     const usersCheck  = ora('Getting users').start()
     return new Promise((resolve, reject) => {
@@ -164,17 +168,22 @@ const getUsers = () => {
     })
     
 }
-
+// based on liquidation distance check users for liquidation
 const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number] }> => {
     return new Promise((resolve, reject) => {
         var hrstart = process.hrtime()
+        // usersToCheck sorted by liquidation distance
         const usersToCheck: Array<string> = usersSortedByLiquidationDistance()
-        const mappedUsers = usersToCheck.map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) }))
-        mappedUsers.filter(u => usersLiquidationDistance.get(u.publicKey) < 1000).forEach(({publicKey, user}, index) => {
+        // map the users to check to their ClearingHouseUser
+        // and filter out the high margin ratio users
+        const mappedUsers = usersToCheck.map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).filter(u => usersLiquidationDistance.get(u.publicKey) < 10)
+        // loop through each user and check for liquidation
+        mappedUsers.forEach(({publicKey, user}, index) => {
             if (user) {
                 const [canBeLiquidated, marginRatio] = user.canBeLiquidated()
+                // if the user can be liquidated, liquidate
+                // else update their liquidation distance
                 if (canBeLiquidated) {
-
                     liq(new PublicKey(publicKey), user)
                 } else {
                     usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
@@ -189,32 +198,42 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
 let checkUsersInterval : NodeJS.Timer;
 let updateUsersLiquidationDistanceInterval : NodeJS.Timer;
 
+// loop to subscribe users, sometimes there are errors
+// so users who were unable to be subscribed to will be subscribed to in the next loop
+// loop runs until there are no more failed subscriptions or until there have been ten runs of the loop
+let failedSubscriptionLoopsCount = 0
 const loopSubscribeUser = (users : [{ publicKey: string, authority: string}]) => {
     subscribeToUserAccounts(users).then(failedToSubscribe => {
-        if ((failedToSubscribe as Array<any>).length > 0)
+        if ((failedToSubscribe as Array<any>).length > 0 && failedSubscriptionLoopsCount < 10) {
+            failedSubscriptionLoopsCount++
             loopSubscribeUser(failedToSubscribe as [{ publicKey: string, authority: string}])
+        }
+            
     })
 }
 
 const startLiquidationBot = () : Promise<Map<string, number>> => {
     return new Promise(async (resolve, reject) => {
+        // reset the failed subscription loops count
+        failedSubscriptionLoopsCount = 0
+        // get the users and send them to the subscription loop
         getUsers().then((users) => loopSubscribeUser(users as [{ publicKey: string, authority: string}]))
         const userLiquidationSpinner = ora('Checking users for liquidation').start()
 
-        let usersCheckedCount = 0
-        let numUsersChecked = 0
-        let totalTime = 0
-
-        clearInterval(checkUsersInterval)
         clearInterval(updateUsersLiquidationDistanceInterval)
-        
-
         // update all users liquidation distance every minute
         updateUsersLiquidationDistanceInterval = setInterval(() => {
             usersSortedByLiquidationDistance().map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).forEach(u => {
                 usersLiquidationDistance.set(u.publicKey, calcDistanceToLiq(u.user.canBeLiquidated()[1]))
             })
         }, 60 * 1000)
+
+        // prepare variables for liquidation loop
+        let usersCheckedCount = 0
+        let numUsersChecked = 0
+        let totalTime = 0
+
+        clearInterval(checkUsersInterval)
 
         // check users every 5 ms
         checkUsersInterval = setInterval(() => {
@@ -225,7 +244,7 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
             })
         }, 5)
 
-        // end current loop after 2 minutes
+        // resolve current loop after 2 minutes
         setTimeout(() => {
             userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times. Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
             resolve(usersLiquidationDistance)
@@ -234,16 +253,21 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
     })
 }
 
+// main loop function
 let botLoopCount = 0;
 const botLoop = (spinner) => {
+    // increment bot loop count
     botLoopCount++
     spinner.succeed("Loop Count: " + botLoopCount)
+    // start the liquidation bot
     startLiquidationBot().then(() => {
+        // once the bot loop has finished, start it again
         botLoop(spinner)
     })
 }
 
 const spinner = ora('Starting Bot').start();
+// main entry
 botLoop(spinner)
 
 
