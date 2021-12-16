@@ -18,21 +18,42 @@ const localStorage = new LocalStorage('./storage');
 
 import { config } from 'dotenv';
 config({path: './.env.local'});
-const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/")
+
+
+
+// ENVIRONMENT VARIABLE FOR THE BOT PRIVATE KEY
 const botKey = process.env.BOT_KEY
 
 if (botKey === undefined) {
     console.error('need a BOT_KEY env variable');
     process.exit()
 }
+// setup wallet
+let keypair;
 
-const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
-const keypair = Keypair.fromSecretKey(
-    from_b58(botKey, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")!
-);
+try {
+    keypair = Keypair.fromSecretKey(
+        from_b58(botKey, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")!
+    );
+} catch {
+    try {
+        keypair = Keypair.fromSecretKey(
+            Uint8Array.from(JSON.parse(botKey))
+        );
+    } catch {
+        console.error('Failed to parse private key from Uint8Array (solana-keygen) and base58 encoded string (phantom wallet export)')
+        process.exit();
+    }
+}
 const botWallet = new Wallet(keypair);
+
+
+//setup solana rpc connection
+const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/")
 const provider = new Provider(mainnetConnection, botWallet, Provider.defaultOptions());
 
+//setup drift protocol
+const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
 const clearingHouse = ClearingHouse.from(
     mainnetConnection,
     provider.wallet,
@@ -40,7 +61,7 @@ const clearingHouse = ClearingHouse.from(
         sdkConfig.CLEARING_HOUSE_PROGRAM_ID
     )
 )
-
+// setup bot state
 const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
 const usersLiquidationDistance : Map<string, number> =  new Map<string, number>();
 const usersSortedByLiquidationDistance  = () : Array<string>  => {
@@ -50,7 +71,7 @@ const usersSortedByLiquidationDistance  = () : Array<string>  => {
     })
     return publicKeys
 }
-
+// liquidation helper function
 const liq = (pub:PublicKey, user:ClearingHouseUser) => {
     const liqSpinner = ora("Attempting to liquidate user")
     clearingHouse.liquidate(pub).then((tx) => {
@@ -59,6 +80,7 @@ const liq = (pub:PublicKey, user:ClearingHouseUser) => {
         liqSpinner.fail(error)
     });
 }
+
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
 const calcDistanceToLiq = (marginRatio) => {
@@ -84,7 +106,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
                     countSubscribed++
                     if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                        subscribingUserAccountsORA.succeed('1. subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                        subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                         resolve(subscribeToUserAccounts(failedToSubscribe as [{ publicKey: string, authority: string }]))
                     }
                     return;
@@ -99,7 +121,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                             usersLiquidationDistance.set(pub.toBase58(), calcDistanceToLiq(marginRatio))
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('2. subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                            subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                             resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                         }
                         
@@ -108,7 +130,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                             failedToSubscribe.push(programUserAccount)
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('3. subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                            subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                             resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                         }
                     })
@@ -119,7 +141,7 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                     failedToSubscribe.push(programUserAccount)
                 }
                 if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                    subscribingUserAccountsORA.succeed('4. subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
+                    subscribingUserAccountsORA.succeed('subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
                     resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
                 }
                 
@@ -195,6 +217,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
     })
 }
 
+// interval timer state variables
 let checkUsersInterval : NodeJS.Timer;
 let updateUsersLiquidationDistanceInterval : NodeJS.Timer;
 
@@ -212,6 +235,7 @@ const loopSubscribeUser = (users : [{ publicKey: string, authority: string}]) =>
     })
 }
 
+// liquidation bot, where the magic happens
 const startLiquidationBot = () : Promise<Map<string, number>> => {
     return new Promise(async (resolve, reject) => {
         // reset the failed subscription loops count
@@ -253,7 +277,7 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
     })
 }
 
-// main loop function
+// loop the bot
 let botLoopCount = 0;
 const botLoop = (spinner) => {
     // increment bot loop count
