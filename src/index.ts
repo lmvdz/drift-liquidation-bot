@@ -31,6 +31,9 @@ const updateLiquidationDistanceInMinutes = 1
 const checkUsersInMS = 5
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
+// (margin_ratio / partial_liquidation_ratio) + (margin_ratio % partial_liquidation_ratio)
+// 1 corresponds to liquidatable
+// anything greater than 1 is no liquidatable
 const minLiquidationDistance = 10
 
 
@@ -96,10 +99,16 @@ const liq = (pub:PublicKey, user:ClearingHouseUser) => {
     });
 }
 
+// if the margin ratio is less than the liquidation ratio just return 1 to move it to the front of the liquidation distance array
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
 const calcDistanceToLiq = (marginRatio) => {
-    return marginRatio.div(PARTIAL_LIQUIDATION_RATIO).toNumber() + marginRatio.mod(PARTIAL_LIQUIDATION_RATIO).toNumber()
+    if (marginRatio <= PARTIAL_LIQUIDATION_RATIO) {
+        return 1
+    } else {
+        return marginRatio.div(PARTIAL_LIQUIDATION_RATIO).toNumber() + marginRatio.mod(PARTIAL_LIQUIDATION_RATIO).toNumber()
+    }
+    
 }
 
 
