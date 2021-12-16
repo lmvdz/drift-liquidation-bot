@@ -21,11 +21,22 @@ config({path: './.env.local'});
 
 
 
+// CONFIG THE LOOP
+
+// how many minutes will one loop last
+const liquidationLoopTimeInMinutes = 2
+// update the liquidation distance of all users every X minutes
+const updateLiquidationDistanceInMinutes = 1
+// check users for liquidation every X milliseconds
+const checkUsersInMS = 5
+
+
+const botKeyEnvVariable = "BOT_KEY"
 // ENVIRONMENT VARIABLE FOR THE BOT PRIVATE KEY
-const botKey = process.env.BOT_KEY
+const botKey = process.env[botKeyEnvVariable]
 
 if (botKey === undefined) {
-    console.error('need a BOT_KEY env variable');
+    console.error('need a ' + botKeyEnvVariable +' env variable');
     process.exit()
 }
 // setup wallet
@@ -49,7 +60,8 @@ const botWallet = new Wallet(keypair);
 
 
 //setup solana rpc connection
-const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/")
+// the one provided is the best one as it allows for unlimited TPS
+const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/") 
 const provider = new Provider(mainnetConnection, botWallet, Provider.defaultOptions());
 
 //setup drift protocol
@@ -250,7 +262,7 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
             usersSortedByLiquidationDistance().map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).forEach(u => {
                 usersLiquidationDistance.set(u.publicKey, calcDistanceToLiq(u.user.canBeLiquidated()[1]))
             })
-        }, 60 * 1000)
+        }, 60 * 1000 * updateLiquidationDistanceInMinutes)
 
         // prepare variables for liquidation loop
         let usersCheckedCount = 0
@@ -266,13 +278,13 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
                 numUsersChecked += numOfUsersChecked
                 totalTime += Number(time[0] * 1000) + Number(time[1] / 1000000)
             })
-        }, 5)
+        }, checkUsersInMS)
 
         // resolve current loop after 2 minutes
         setTimeout(() => {
-            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times. Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
+            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over . Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
             resolve(usersLiquidationDistance)
-        }, 60 * 1000 * 2)
+        }, 60 * 1000 * liquidationLoopTimeInMinutes)
         
     })
 }
