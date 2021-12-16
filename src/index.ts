@@ -24,9 +24,9 @@ config({path: './.env.local'});
 // CONFIG THE LOOP
 
 // how many minutes will one loop last
-const liquidationLoopTimeInMinutes = .5
+const liquidationLoopTimeInMinutes = 5
 // update the liquidation distance of all users every X minutes
-const updateLiquidationDistanceInMinutes = 1
+const updateLiquidationDistanceInMinutes = 2.5
 // check users for liquidation every X milliseconds
 const checkUsersInMS = 5
 // only check users who's liquidation distance is less than X
@@ -34,6 +34,8 @@ const checkUsersInMS = 5
 // (margin_ratio / partial_liquidation_ratio) + (margin_ratio % partial_liquidation_ratio)
 // 1 corresponds to liquidatable
 // anything greater than 1 is no liquidatable
+// a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
+// 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 const minLiquidationDistance = 10
 
 
@@ -103,7 +105,7 @@ const liq = (pub:PublicKey, user:ClearingHouseUser) => {
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
 const calcDistanceToLiq = (marginRatio) => {
-    if (marginRatio <= PARTIAL_LIQUIDATION_RATIO) {
+    if (marginRatio.toNumber() <= PARTIAL_LIQUIDATION_RATIO.toNumber()) {
         return 1
     } else {
         return marginRatio.div(PARTIAL_LIQUIDATION_RATIO).toNumber() + marginRatio.mod(PARTIAL_LIQUIDATION_RATIO).toNumber()
@@ -227,6 +229,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
         mappedUsers.forEach(({publicKey, user}, index) => {
             if (user) {
                 const [canBeLiquidated, marginRatio] = user.canBeLiquidated()
+                // console.log('user :' + publicKey + ' has margin ratio: ' + marginRatio.toNumber())
                 // if the user can be liquidated, liquidate
                 // else update their liquidation distance
                 if (canBeLiquidated) {
