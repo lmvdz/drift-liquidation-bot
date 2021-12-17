@@ -217,18 +217,23 @@ const getUsers = () => {
     
 }
 // based on liquidation distance check users for liquidation
-const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number] }> => {
+const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number], averageMarginRatio: number }> => {
     return new Promise((resolve, reject) => {
         var hrstart = process.hrtime()
         // usersToCheck sorted by liquidation distance
         const usersToCheck: Array<string> = usersSortedByLiquidationDistance()
+
         // map the users to check to their ClearingHouseUser
         // and filter out the high margin ratio users
         const mappedUsers = usersToCheck.map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).filter(u => usersLiquidationDistance.get(u.publicKey) < minLiquidationDistance)
+        
+        let averageMarginRatio = 0
+        
         // loop through each user and check for liquidation
         mappedUsers.forEach(({publicKey, user}, index) => {
             if (user) {
                 const [canBeLiquidated, marginRatio] = user.canBeLiquidated()
+                averageMarginRatio += marginRatio.toNumber()
                 // console.log('user :' + publicKey + ' has margin ratio: ' + marginRatio.toNumber())
                 // if the user can be liquidated, liquidate
                 // else update their liquidation distance
@@ -240,7 +245,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
                 }
             }
         })
-        resolve({numOfUsersChecked: mappedUsers.length, time: process.hrtime(hrstart)})
+        resolve({numOfUsersChecked: mappedUsers.length, time: process.hrtime(hrstart), averageMarginRatio })
     })
 }
 
@@ -283,21 +288,23 @@ const startLiquidationBot = () : Promise<Map<string, number>> => {
         let usersCheckedCount = 0
         let numUsersChecked = 0
         let totalTime = 0
+        let avgMarginRatio = 0
 
         clearInterval(checkUsersInterval)
 
         // check users every 5 ms
         checkUsersInterval = setInterval(() => {
-            checkUsersForLiquidation().then(({numOfUsersChecked, time }) => {
+            checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
                 usersCheckedCount++
                 numUsersChecked += numOfUsersChecked
+                avgMarginRatio += averageMarginRatio
                 totalTime += Number(time[0] * 1000) + Number(time[1] / 1000000)
             })
         }, checkUsersInMS)
 
         // resolve current loop after 2 minutes
         setTimeout(() => {
-            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\t Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms')
+            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\t Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms\n\t Average margin ratio was: ' + (avgMarginRatio/numUsersChecked))
             resolve(usersLiquidationDistance)
         }, 60 * 1000 * liquidationLoopTimeInMinutes)
         
