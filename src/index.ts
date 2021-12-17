@@ -1,21 +1,36 @@
+
+// for some reason I had to split these two imports... commonJS complains
 import pkg from '@project-serum/anchor'
 const {Provider, Wallet} = pkg
 import { ProgramAccount } from '@project-serum/anchor';
-import {
-	 ClearingHouse, ClearingHouseUser, PARTIAL_LIQUIDATION_RATIO
-} from '@drift-labs/sdk';
+
+// solana web3
 import { Connection, PublicKey, Keypair } from '@solana/web3.js'
+
+// used for drift sdk
 import {
+    ClearingHouse, 
+    ClearingHouseUser, 
+    PARTIAL_LIQUIDATION_RATIO,
 	initialize,
 	DriftEnv
 } from '@drift-labs/sdk';
+
+// used to convert phantom private key into a usable form
 import { from_b58 } from "./util/base56.js"
+
+// used to convert from and to base64 respectively
 import { btoa } from "./util/btoa.js"
 import { atob } from "./util/atob.js"
+
+// used to store the data, uses the same api calls as window.localStorage but works with nodejs
 import { LocalStorage } from 'node-localstorage'
-import ora from 'ora'
 const localStorage = new LocalStorage('./storage');
 
+// used to make the spinner, checkmark in console
+import ora from 'ora'
+
+// used to get environment variables
 import { config } from 'dotenv';
 config({path: './.env.local'});
 
