@@ -27,21 +27,28 @@ import { atob } from "./util/atob.js"
 import { LocalStorage } from 'node-localstorage'
 const localStorage = new LocalStorage('./storage');
 
-// used to make the spinner, checkmark in console
-import ora from 'ora'
+
+import Spinnies from 'spinnies';
+
+const spinnies = new Spinnies();
+
+spinnies.add("botLoop", { text: "Waiting to start"})
+spinnies.add('getUsers', { status: 'stopped', text: 'Get Users: Waiting for initialization'})
+spinnies.add('subscribeUsers', { status: 'stopped', text: 'Subscribe Users: Waiting for initialization'})
+spinnies.add('liqDistanceUpdate', { status: 'stopped', text: 'Liquidation Distance: Waiting for initialilzation'})
+spinnies.add('loopSpinner', { status: 'stopped', text: 'Check Users: Waiting for initialization'})
+spinnies.add('loopSpinnerLast', { status: 'stopped', text: 'User Check History: Waiting for data'})
 
 // used to get environment variables
 import { config } from 'dotenv';
 config({path: './.env.local'});
 
-
-
 // CONFIG THE LOOP
 
 // how many minutes will one loop last
-const liquidationLoopTimeInMinutes = 5
-// update the liquidation distance of all users every X minutes
-const updateLiquidationDistanceInMinutes = 2.5
+const liquidationLoopTimeInMinutes = 0.5
+// update the liquidation distance of all users every X minutes, must be lower than the liquidationLoopTimeInMinutes otherwise won't be called
+const updateLiquidationDistanceInMinutes = liquidationLoopTimeInMinutes / 2
 // check users for liquidation every X milliseconds
 const checkUsersInMS = 5
 // only check users who's liquidation distance is less than X
@@ -108,11 +115,12 @@ const usersSortedByLiquidationDistance  = () : Array<string>  => {
 }
 // liquidation helper function
 const liq = (pub:PublicKey, user:ClearingHouseUser) => {
-    const liqSpinner = ora("Attempting to liquidate user")
+    const t = new Date();
+    spinnies.add('liqSpinner-'+t, { status: 'spinning', text: "Attempting to liquidate user: "  + pub})
     clearingHouse.liquidate(pub).then((tx) => {
-        liqSpinner.succeed(`Liquidated user: ${user.authority} Tx: ${tx}`);
+        spinnies.succeed('liqSpinner-'+t, { text: (`Liquidated user: ${user.authority} Tx: ${tx}`) });
     }).catch(error => {
-        liqSpinner.fail(error)
+        spinnies.fail('liqSpinner-'+t, { text: error })
     });
 }
 
@@ -131,12 +139,15 @@ const calcDistanceToLiq = (marginRatio) => {
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
-const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, authority: string }]) => {
-    const subscribingUserAccountsORA = ora('subscribing users').start()
+const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string, authority: string }>) => {
     return new Promise((resolve, reject) => {
         let countSubscribed = 0
         const failedToSubscribe:Array<{publicKey: string, authority: string}> = []
-
+        if (programUserAccounts.length < 1) {
+            resolve (failedToSubscribe)
+            return;
+        }
+        spinnies.update('subscribeUsers', { status: 'spinning', text: 'Subscribing users' })
         programUserAccounts.forEach((programUserAccount: {publicKey: string, authority: string}, index: number) => {
             const authority = new PublicKey(programUserAccount.authority)
             const user = ClearingHouseUser.from(
@@ -147,8 +158,10 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
                     countSubscribed++
                     if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                        subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
-                        resolve(subscribeToUserAccounts(failedToSubscribe as [{ publicKey: string, authority: string }]))
+                        spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts'})
+                        setTimeout(() => {
+                            resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
+                        }, 1000)
                     }
                     return;
                 } else {
@@ -162,28 +175,35 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
                             usersLiquidationDistance.set(pub.toBase58(), calcDistanceToLiq(marginRatio))
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
-                            resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
+                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts'})
+                            setTimeout(() => {
+                                resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
+                            }, 1000)
                         }
-                        
                     }).catch(error => {
+                        console.error(error)
                         if (!failedToSubscribe.includes(programUserAccount)) {
                             failedToSubscribe.push(programUserAccount)
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
-                            resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
+                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts' })
+                            setTimeout(() => {
+                                resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
+                            }, 1000)
                         }
                     })
                 }
                 
             }).catch(error => {
+                console.error(error)
                 if (!failedToSubscribe.includes(programUserAccount)) {
                     failedToSubscribe.push(programUserAccount)
                 }
                 if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                    subscribingUserAccountsORA.succeed('Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts')
-                    resolve(subscribeToUserAccounts(failedToSubscribe  as [{ publicKey: string, authority: string }]))
+                    spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts' })
+                    setTimeout(() => {
+                        resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
+                    }, 1000)
                 }
                 
             })
@@ -197,18 +217,18 @@ const subscribeToUserAccounts = (programUserAccounts : [{ publicKey: string, aut
 // add the new users to the storage
 // maybe one day only request users which are not in storage
 const getUsers = () => {
-    const usersCheck  = ora('Getting users').start()
     return new Promise((resolve, reject) => {
+        spinnies.update('getUsers', { status: 'spinning', text: 'Getting users' })
         const programUserAccounts = localStorage.getItem('programUserAccounts')
         if (programUserAccounts !== undefined && programUserAccounts !== null) {
-            usersCheck.text = ('User accounts found in local storage')
+            spinnies.update('getUsers', { text: 'User accounts found in local storage' })
         } else {
-            usersCheck.text = ('No user accounts found in local storage')
+            spinnies.update('getUsers', { text: 'No user accounts found in local storage' })
         }
         clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
-            usersCheck.text = ('Retrieved all users')
+            spinnies.update('getUsers', { text: 'Retrieved all users' })
             if (programUserAccounts !== undefined && programUserAccounts !== null) {
-                const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as [{ publicKey: string, authority: string}];
+                const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as Array<{ publicKey: string, authority: string}>;
                 let existingUserAccountsLength = existingUserAccounts.length
                 let newlyAddedCount = 0
                 newProgramUserAccounts.forEach((newUserAccount: ProgramAccount) => {
@@ -218,15 +238,15 @@ const getUsers = () => {
                     }
                 })
                 localStorage.setItem('programUserAccounts', btoa(JSON.stringify(existingUserAccounts)))
-                usersCheck.succeed('Updated existing ' + existingUserAccountsLength + ' user accounts with ' + newlyAddedCount + " new accounts.")
+                spinnies.succeed('getUsers', { text: 'Updated existing ' + existingUserAccountsLength + ' user accounts with ' + newlyAddedCount + " new accounts." })
             } else {
                 localStorage.setItem('programUserAccounts', btoa(JSON.stringify(newProgramUserAccounts.map(userAccount => ({ publicKey: userAccount.publicKey.toBase58(), authority: userAccount.account.authority.toBase58() })))))
-                usersCheck.succeed('Stored ' + newProgramUserAccounts.length + ' new accounts to localstorage');
+                spinnies.succeed('getUsers', { text: 'Stored ' + newProgramUserAccounts.length + ' new accounts to localstorage' });
             }
-            resolve(JSON.parse(atob(localStorage.getItem('programUserAccounts')!)))
+            resolve(JSON.parse(atob(localStorage.getItem('programUserAccounts')!)) as Array<{ publicKey: string, authority: string}>)
         }).catch(error => {
             console.error(error)
-            usersCheck.fail('Failed to retreive all users')
+            spinnies.fail('getUsers', { text: 'Failed to retreive all users' })
         });
     })
     
@@ -260,7 +280,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
                 }
             }
         })
-        resolve({numOfUsersChecked: mappedUsers.length, time: process.hrtime(hrstart), averageMarginRatio })
+        resolve({numOfUsersChecked: mappedUsers.length, time: process.hrtime(hrstart), averageMarginRatio: averageMarginRatio })
     })
 }
 
@@ -272,76 +292,85 @@ let updateUsersLiquidationDistanceInterval : NodeJS.Timer;
 // so users who were unable to be subscribed to will be subscribed to in the next loop
 // loop runs until there are no more failed subscriptions or until there have been ten runs of the loop
 let failedSubscriptionLoopsCount = 0
-const loopSubscribeUser = (users : [{ publicKey: string, authority: string}]) => {
-    subscribeToUserAccounts(users).then(failedToSubscribe => {
-        if ((failedToSubscribe as Array<any>).length > 0 && failedSubscriptionLoopsCount < 10) {
-            failedSubscriptionLoopsCount++
-            loopSubscribeUser(failedToSubscribe as [{ publicKey: string, authority: string}])
-        }
-            
-    })
-}
-
-// liquidation bot, where the magic happens
-const startLiquidationBot = () : Promise<Map<string, number>> => {
-    return new Promise(async (resolve, reject) => {
-        // reset the failed subscription loops count
+const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: string}>) => {
+    if (spinnies.pick('subscribeUsers').status === 'stopped') {
+        spinnies.update('subscribeUsers', { status: "spinning", text: "User data recieved"})
+    } else if (spinnies.pick('subscribeUsers').status === 'succeed') {
         failedSubscriptionLoopsCount = 0
-        // get the users and send them to the subscription loop
-        getUsers().then((users) => loopSubscribeUser(users as [{ publicKey: string, authority: string}]))
-        const userLiquidationSpinner = ora('Checking users for liquidation').start()
+    }
+    subscribeToUserAccounts(newUsers).then((failedToSubscribe : Array<{ publicKey: string, authority: string}>) => {
+        if (failedToSubscribe.length > 0 && failedSubscriptionLoopsCount < 10) {
+            failedSubscriptionLoopsCount++
+            loopSubscribeUser(failedToSubscribe as Array<{ publicKey: string, authority: string}>)
+        } else {
+            // update all users liquidation distance every minute
+            updateUsersLiquidationDistanceInterval = setInterval(() => {
+                let startTime = Date.now()
+                let nextIntervalStartTime = startTime + 60 * 1000 * updateLiquidationDistanceInMinutes
+                spinnies.update('liqDistanceUpdate', { status: 'spinning', text: 'Updating liquidation distance for all users.'})
+                usersSortedByLiquidationDistance().map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).forEach(u => {
+                    usersLiquidationDistance.set(u.publicKey, calcDistanceToLiq(u.user.canBeLiquidated()[1]))
+                })
+                spinnies.succeed('liqDistanceUpdate', { text: 'Updated liquidation distance for all users.'})
+                setTimeout(() => {
+                    const interval = setInterval(() => {
+                        spinnies.update('liqDistanceUpdate', { status: 'spinning', text: 'Next liquidation distance update in ' + Math.max(0, (nextIntervalStartTime - Date.now()) / 1000) + ' seconds.'})
+                    }, 5000)
+                    setTimeout(() => {
+                        clearInterval(interval)
+                    }, 30 * 1000 * updateLiquidationDistanceInMinutes)
+                }, 30 * 1000 * updateLiquidationDistanceInMinutes)
+            }, 60 * 1000 * updateLiquidationDistanceInMinutes)
 
-        clearInterval(updateUsersLiquidationDistanceInterval)
-        // update all users liquidation distance every minute
-        updateUsersLiquidationDistanceInterval = setInterval(() => {
-            usersSortedByLiquidationDistance().map(checkingUser => ({ publicKey: checkingUser, user: users.get(checkingUser) })).forEach(u => {
-                usersLiquidationDistance.set(u.publicKey, calcDistanceToLiq(u.user.canBeLiquidated()[1]))
-            })
-        }, 60 * 1000 * updateLiquidationDistanceInMinutes)
+            // prepare variables for liquidation loop
+            let intervalCount = 0
+            let numUsersChecked = 0
+            let totalTime = 0
+            let avgMarginRatio = 0
 
-        // prepare variables for liquidation loop
-        let usersCheckedCount = 0
-        let numUsersChecked = 0
-        let totalTime = 0
-        let avgMarginRatio = 0
+            spinnies.update('loopSpinner', { status: 'spinning', text: 'Checking users for liquidation' })
+            checkUsersInterval = setInterval(() => {
+                checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
+                    // spinnies.update('loopSpinner', { text: 'Users checked: ' + numOfUsersChecked + ', took: '+ Number(time[0] * 1000) + Number(time[1] / 1000000) + 'ms, avg margin ratio: ' +  averageMarginRatio/numOfUsersChecked})
+                    intervalCount++
+                    numUsersChecked += Number(numOfUsersChecked)
+                    avgMarginRatio += Number(averageMarginRatio)
+                    totalTime += Number(time[0] * 1000) + Number(time[1] / 1000000)
+                })
+            }, checkUsersInMS)
 
-        clearInterval(checkUsersInterval)
-
-        // check users every 5 ms
-        checkUsersInterval = setInterval(() => {
-            checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
-                usersCheckedCount++
-                numUsersChecked += numOfUsersChecked
-                avgMarginRatio += averageMarginRatio
-                totalTime += Number(time[0] * 1000) + Number(time[1] / 1000000)
-            })
-        }, checkUsersInMS)
-
-        // resolve current loop after 2 minutes
-        setTimeout(() => {
-            userLiquidationSpinner.succeed('Checked approx. ' + parseInt((numUsersChecked/usersCheckedCount)+"") + ' users for liquidation ' + usersCheckedCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\t Average time to check all users was: ' + (totalTime/usersCheckedCount) + 'ms\n\t Average margin ratio was: ' + (avgMarginRatio/numUsersChecked))
-            resolve(usersLiquidationDistance)
-        }, 60 * 1000 * liquidationLoopTimeInMinutes)
-        
+            setTimeout(() => {
+                clearInterval(checkUsersInterval)
+                clearInterval(updateUsersLiquidationDistanceInterval)
+                spinnies.update('loopSpinnerLast', { status: 'succeed', succeedColor: 'green', text: 'Last Loop: Checked approx. ' + parseInt((numUsersChecked/intervalCount)+"") + ' users for liquidation ' + intervalCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\nAverage time to check all users was: ' + (totalTime/intervalCount).toFixed(2) + 'ms\nAverage margin ratio was: ' + (avgMarginRatio/numUsersChecked).toFixed(2)})
+                spinnies.update('loopSpinner', { status: 'stopped', text: 'Bot cooling down!' })
+                spinnies.update('getUsers', { status: 'stopped', text: 'Bot cooling down!' })
+                setTimeout(() => {
+                    getUsers().then((users) => loopSubscribeUser(users as Array<{ publicKey: string, authority: string}>))
+                }, 10000)
+            }, 60 * 1000 * liquidationLoopTimeInMinutes)
+        }
     })
 }
 
-// loop the bot
-let botLoopCount = 0;
-const botLoop = (spinner) => {
-    // increment bot loop count
-    botLoopCount++
-    spinner.succeed("Loop Count: " + botLoopCount)
-    // start the liquidation bot
-    startLiquidationBot().then(() => {
-        // once the bot loop has finished, start it again
-        botLoop(spinner)
-    })
+let str = "Bot started... Printing Money... ";
+let str2 = "Brrr!"
+let str2Length = str2.length
+let index = 0
+// liquidation bot, where the magic happens
+const startLiquidationBot = () => {
+    spinnies.update("botLoop", { text: str })
+    setInterval(() => {
+        spinnies.update("botLoop", { text: str + str2.substring(0, index)})
+        index++
+        if (index > str2Length) {
+            index = 0
+        }
+    }, 1000)
+    getUsers().then((users) => loopSubscribeUser(users as Array<{ publicKey: string, authority: string}>))
 }
 
-const spinner = ora('Starting Bot').start();
-// main entry
-botLoop(spinner)
+startLiquidationBot()
 
 
 

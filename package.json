@@ -5,7 +5,8 @@
   "exports": "./src/index.ts",
   "type": "module",
   "scripts": {
-    "start": "node --loader ts-node/esm ./src/index.ts"
+    "start": "node --no-warnings --loader ts-node/esm ./src/index.ts",
+    "test": "node --no-warnings --loader ts-node/esm ./src/test.ts"
   },
   "author": "",
   "engines": {
@@ -18,6 +19,7 @@
     "dotenv": "^10.0.0",
     "node-localstorage": "^2.2.1",
     "ora": "^6.0.1",
+    "spinnies": "^0.5.1",
     "ts-node": "^10.4.0"
   },
   "devDependencies": {
