@@ -6,10 +6,18 @@ The `BOT_KEY` can either be a Uint8Array (solana-keygen) or base_58 encoded priv
 
 There are some config variables you can configure.  
 
+- how often the loop resets and checks for new users to subscribe to  
 `liquidationLoopTimeInMinutes`  
+  
+- how often the loop checks all users' liquidation distance  
 `updateLiquidationDistanceInMinutes`  
+  
+- how often to check for liquidatable users within minimum liquidation distance  
 `checkUsersInMS`  
+  
+- min liquidation distance to consider  
 `minLiquidationDistance`  
+  
 
 Most of the code is documented.  
 
