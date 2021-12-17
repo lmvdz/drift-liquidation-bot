@@ -9,6 +9,7 @@ There are some config variables you can configure.
 `liquidationLoopTimeInMinutes`  
 `updateLiquidationDistanceInMinutes`  
 `checkUsersInMS`  
+`minLiquidationDistance`  
 
 Most of the code is documented.  
 
