@@ -349,7 +349,7 @@ const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: stri
                         'Looped ' + intervalCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\n(min / avg / max)\n\n' +
                         'Checked: ' + Math.min(...numUsersChecked) + ' / ' + parseInt((numUsersChecked.reduce((a, b) => a+b)/intervalCount)+"") + ' / ' + Math.max(...numUsersChecked) + ' users\n' + 
                         'Time to check was: ' + Math.min(...totalTime) + ' / ' + (totalTime.reduce((a, b) => a+b)/intervalCount).toFixed(2) + ' / ' + Math.max(...totalTime) + ' ms\n' + 
-                        'Margin ratio was: ' + Math.min(...avgMarginRatio) + ' / ' + (avgMarginRatio.reduce((a, b) => a+b)/numUsersChecked.reduce((a, b) => a+b)).toFixed(2) + ' / ' + Math.max(...avgMarginRatio)
+                        'Margin ratio was: ' + Math.min(...avgMarginRatio) / 100 + ' / ' + ((avgMarginRatio.reduce((a, b) => a+b)/numUsersChecked.reduce((a, b) => a+b)) / 100).toFixed(2) + ' / ' + Math.max(...avgMarginRatio) / 100 + ' %'
                     }
                 )
                 spinnies.update('loopSpinner', { status: 'stopped', text: 'Bot cooling down!' })
