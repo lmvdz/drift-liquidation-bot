@@ -147,7 +147,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
             resolve (failedToSubscribe)
             return;
         }
-        spinnies.update('subscribeUsers', { status: 'spinning', text: 'Subscribing users' })
+        spinnies.update('subscribeUsers', { status: 'spinning', text: 'Subscribing to user accounts' })
         programUserAccounts.forEach((programUserAccount: {publicKey: string, authority: string}, index: number) => {
             const authority = new PublicKey(programUserAccount.authority)
             const user = ClearingHouseUser.from(
@@ -158,7 +158,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
                     countSubscribed++
                     if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                        spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts'})
+                        spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ', and failed to subscribe to ' + failedToSubscribe.length + ' user accounts'})
                         setTimeout(() => {
                             resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
                         }, 1000)
@@ -175,7 +175,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                             usersLiquidationDistance.set(pub.toBase58(), calcDistanceToLiq(marginRatio))
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts'})
+                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ', and failed to subscribe to ' + failedToSubscribe.length + ' user accounts'})
                             setTimeout(() => {
                                 resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
                             }, 1000)
@@ -186,7 +186,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                             failedToSubscribe.push(programUserAccount)
                         }
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts' })
+                            spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ', and failed to subscribe to ' + failedToSubscribe.length + ' user accounts' })
                             setTimeout(() => {
                                 resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
                             }, 1000)
@@ -200,7 +200,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                     failedToSubscribe.push(programUserAccount)
                 }
                 if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                    spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ' accounts, and failed to subscribe to ' + failedToSubscribe.length + ' accounts' })
+                    spinnies.succeed('subscribeUsers', { text: 'Subscribed to ' + countSubscribed + ', and failed to subscribe to ' + failedToSubscribe.length + ' user accounts' })
                     setTimeout(() => {
                         resolve(failedToSubscribe as Array<{ publicKey: string, authority: string }>)
                     }, 1000)
@@ -324,30 +324,39 @@ const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: stri
 
             // prepare variables for liquidation loop
             let intervalCount = 0
-            let numUsersChecked = 0
-            let totalTime = 0
-            let avgMarginRatio = 0
+            let numUsersChecked = Array<number>();
+            let totalTime = Array<number>();
+            let avgMarginRatio = Array<number>();
 
             spinnies.update('loopSpinner', { status: 'spinning', text: 'Checking users for liquidation' })
             checkUsersInterval = setInterval(() => {
                 checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
                     // spinnies.update('loopSpinner', { text: 'Users checked: ' + numOfUsersChecked + ', took: '+ Number(time[0] * 1000) + Number(time[1] / 1000000) + 'ms, avg margin ratio: ' +  averageMarginRatio/numOfUsersChecked})
                     intervalCount++
-                    numUsersChecked += Number(numOfUsersChecked)
-                    avgMarginRatio += Number(averageMarginRatio)
-                    totalTime += Number(time[0] * 1000) + Number(time[1] / 1000000)
+                    numUsersChecked.push(Number(numOfUsersChecked))
+                    avgMarginRatio.push(Number(averageMarginRatio))
+                    totalTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
                 })
             }, checkUsersInMS)
 
             setTimeout(() => {
                 clearInterval(checkUsersInterval)
                 clearInterval(updateUsersLiquidationDistanceInterval)
-                spinnies.update('loopSpinnerLast', { status: 'succeed', succeedColor: 'green', text: 'Last Loop: Checked approx. ' + parseInt((numUsersChecked/intervalCount)+"") + ' users for liquidation ' + intervalCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\nAverage time to check all users was: ' + (totalTime/intervalCount).toFixed(2) + 'ms\nAverage margin ratio was: ' + (avgMarginRatio/numUsersChecked).toFixed(2)})
+                spinnies.update('loopSpinnerLast', { 
+                    status: 'succeed', 
+                    succeedColor: 'green', 
+                    text: 'Last Run Statistics\n'+
+                        'Looped ' + intervalCount + ' times over ' + liquidationLoopTimeInMinutes * 60 + ' seconds.\n\n(min / avg / max)\n\n' +
+                        'Checked: ' + Math.min(...numUsersChecked) + ' / ' + parseInt((numUsersChecked.reduce((a, b) => a+b)/intervalCount)+"") + ' / ' + Math.max(...numUsersChecked) + ' users\n' + 
+                        'Time to check was: ' + Math.min(...totalTime) + ' / ' + (totalTime.reduce((a, b) => a+b)/intervalCount).toFixed(2) + ' / ' + Math.max(...totalTime) + ' ms\n' + 
+                        'Margin ratio was: ' + Math.min(...avgMarginRatio) + ' / ' + (avgMarginRatio.reduce((a, b) => a+b)/numUsersChecked.reduce((a, b) => a+b)).toFixed(2) + ' / ' + Math.max(...avgMarginRatio)
+                    }
+                )
                 spinnies.update('loopSpinner', { status: 'stopped', text: 'Bot cooling down!' })
                 spinnies.update('getUsers', { status: 'stopped', text: 'Bot cooling down!' })
                 setTimeout(() => {
                     getUsers().then((users) => loopSubscribeUser(users as Array<{ publicKey: string, authority: string}>))
-                }, 10000)
+                }, 5000)
             }, 60 * 1000 * liquidationLoopTimeInMinutes)
         }
     })
