@@ -217,7 +217,7 @@ const getNewUsers = (workerCount) => {
         }
         workers.set(workerUUID, 
             fork("./src/worker.js",
-                [workerUUID,userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
+                [workerUUID,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
                 {
                     stdio: [ 'pipe', 'pipe', (() => {
                         if (fs.existsSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out')) {
@@ -245,12 +245,12 @@ const getNewUsers = (workerCount) => {
                             let dataFromMap = JSON.parse(mapData)
                             let r =  {
                                 "Worker": wrkr.split('-')[4],
-                                "Users Within Distance": dataFromMap.usersChecked,
-                                "Average Check MS per User": dataFromMap.avgCheckMsPerUser,
+                                // "Users Within Distance": dataFromMap.usersChecked,
                                 "User Count": dataFromMap.userCount,
                                 "Times Checked": dataFromMap.intervalCount,
                                 "Total MS": dataFromMap.totalTime,
-                                "Smallest Margin %": dataFromMap.minMargin
+                                "Check MS per User": dataFromMap.avgCheckMsPerUser,
+                                // "Smallest Margin %": dataFromMap.minMargin
                             }
                             if (!splitUsersBetweenWorkers) {
                                 r["Margin with Slippage"] =  dataFromMap.slipLiq

@@ -32,14 +32,12 @@ const uuid = args[0]
 
 // CONFIG THE LOOP TAKEN FROM THE ARGUMENTS SUPPLIED FROM INDEX.TS
 
-// how many minutes before new users will be loaded from storage
-const userUpdateInMinutes = parseFloat(args[1])
 // worker loop time in minutes
-const workerLoopTimeInMinutes = parseFloat(args[2])
+const workerLoopTimeInMinutes = parseFloat(args[1])
 // update the liquidation distance of all users every X minutes, must be lower than the liquidationLoopTimeInMinutes otherwise won't be called
-const updateLiquidationDistanceInMinutes = parseFloat(args[3])
+const updateLiquidationDistanceInMinutes = parseFloat(args[2])
 // check users for liquidation every X milliseconds
-const checkUsersInMS = parseFloat(args[4])
+const checkUsersInMS = parseFloat(args[3])
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
 // (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
@@ -48,10 +46,10 @@ const checkUsersInMS = parseFloat(args[4])
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = parseFloat(args[5])
+const minLiquidationDistance = parseFloat(args[4])
 
 // the slippage of partial liquidation as a percentage
-const partialLiquidationSlippage = parseFloat(args[6])
+const partialLiquidationSlippage = parseFloat(args[5])
 
 interface User {
     account: UserAccount,
@@ -281,7 +279,7 @@ const startWorker = () => {
                     totalTime: data.time.total,
                     minMargin: data.margin.min,
                     slipLiq: (slipLiq/100).toFixed(4),
-                    avgCheckMsPerUser: ((data.checked.avg / users.size) / Number(data.time.total)).toFixed(2)
+                    avgCheckMsPerUser: ((intervalCount / users.size) / parseFloat(data.time.total)).toFixed(4)
                 }
             }
             console.log(JSON.stringify(x))
