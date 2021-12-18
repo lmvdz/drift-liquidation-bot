@@ -75,7 +75,7 @@ const getLiqTransactionProfit = (tx:string) : Promise<number> => {
 }
 
 // liquidation helper function
-const liq = (pub:PublicKey, user:string) => {
+const liq = (pub:PublicKey, user:string, distance:number) => {
     _.clearingHouse.liquidate(pub).then((tx) => {
         getLiqTransactionProfit(tx).then((balanceChange : number) => {
             let liquidationStorage = JSON.parse(localStorage.getItem('liquidations'))
@@ -86,7 +86,8 @@ const liq = (pub:PublicKey, user:string) => {
             console.log(`${new Date()} - Liquidated user: ${user} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
         })
     }).catch(error => {
-        console.log(`Failed to liquidate :\(`)
+        if (error.message.includes('custom program error: 0x130'))
+            console.log(`Frontrun failed, sufficient collateral -- ${distance}`)
     });
 }
 
@@ -155,7 +156,7 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
                         // if the user can be liquidated, liquidate
                         // else update their liquidation distance
                         if (closeToLiquidation) {
-                            liq(new PublicKey(publicKey), publicKey)
+                            liq(new PublicKey(publicKey), publicKey, distance)
                         } else {
                             usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
                         }

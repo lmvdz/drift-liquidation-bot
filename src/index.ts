@@ -191,12 +191,21 @@ const getNewUsers = (workerCount) => {
             fork("./src/worker.js",
                 [workerUUID,userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*(x+1)].map(x => x + ""),
                 {
-                    stdio: [ 'pipe', 'pipe', fs.openSync(process.cwd() + '\\src\\logs\\err.out', 'w'), 'ipc' ]
+                    stdio: [ 'pipe', 'pipe', (() => {
+                        if (fs.existsSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out')) {
+                            fs.writeFileSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out', '')
+                        }
+                        return fs.openSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out', 'w')
+                    })(), 'ipc' ]
                 }
             )
         )
         const worker = workers.get(workerUUID)
         worker.stdout.on('data', (data) => {
+            if (fs.existsSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out')) {
+                fs.writeFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', '')
+            }
+            fs.appendFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', data)
             if (workerCount <= 10) {
                 spinnies.update(workerUUID.split('-').join(''), { text: 'worker - ' + workerUUID.substring(0, 8) + ' - ' + (partialLiquidationSlippage*(x+1)).toFixed(4) +  '\n' + data  })
             } else if (data.includes('Liquidated')) {
@@ -204,7 +213,7 @@ const getNewUsers = (workerCount) => {
             }
         })
         worker.stdout.on('close', (error) => {
-            console.log ('child exited with ' + error)
+            worker.kill()
             if (workerCount <= 10) {
                 delete spinnies.spinners[workerUUID.split('-').join('')+''];
             }
