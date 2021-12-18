@@ -5,9 +5,13 @@ import {PublicKey, TransactionResponse } from '@solana/web3.js'
 
 // used for drift sdk
 import {
+    BN_MAX,
     calculateBaseAssetValue,
+    calculatePositionPNL,
     ClearingHouseUser, 
     PARTIAL_LIQUIDATION_RATIO,
+    TEN_THOUSAND,
+    UserAccount,
     UserPosition,
     ZERO,
 } from '@drift-labs/sdk';
@@ -18,6 +22,7 @@ import BN from 'bn.js'
 
 // used to store the data, uses the same api calls as window.localStorage but works with nodejs
 import { LocalStorage } from 'node-localstorage'
+import { IPC_UserAccount, IPC_UserPosition, convertUserPositionFromIPC, convertUserAccountFromIPC } from './ipcInterface.js';
 const localStorage = new LocalStorage('./storage');
 
 const args = process.argv.slice(2);
@@ -48,8 +53,12 @@ const minLiquidationDistance = parseFloat(args[5])
 // the slippage of partial liquidation as a percentage
 const partialLiquidationSlippage = parseFloat(args[6])
 
+interface User {
+    account: UserAccount,
+    positions: Array<UserPosition>
+}
 // setup bot state
-const userPositions : Map<string, Array<UserPosition>> = new Map<string, Array<UserPosition>>();
+const users : Map<string, User> = new Map<string, User>();
 const usersLiquidationDistance : Map<string, number> =  new Map<string, number>();
 // dont sort, slows down the bot, filtering should be good enough
 // const usersSortedByLiquidationDistance  = () : Array<string>  => {
@@ -75,7 +84,7 @@ const getLiqTransactionProfit = (tx:string) : Promise<number> => {
 }
 
 // liquidation helper function
-const liq = (pub:PublicKey, user:string, distance:number) => {
+const liq = (pub:PublicKey, user:string, distance:number, marginRatio: BN, slipLiq: number) => {
     _.clearingHouse.liquidate(pub).then((tx) => {
         getLiqTransactionProfit(tx).then((balanceChange : number) => {
             let liquidationStorage = JSON.parse(localStorage.getItem('liquidations'))
@@ -87,7 +96,7 @@ const liq = (pub:PublicKey, user:string, distance:number) => {
         })
     }).catch(error => {
         if (error.message.includes('custom program error: 0x130'))
-            console.log(`Frontrun failed, sufficient collateral -- ${distance}`)
+            console.log(`Frontrun failed, sufficient collateral -- ${distance} -- ${marginRatio.toNumber()} -- ${slipLiq}`)
     });
 }
 
@@ -100,7 +109,6 @@ const partialLiquidationWithSlippage = () => {
 }
 
 const slipLiq = partialLiquidationWithSlippage()
-console.log('partialLiquidationWithSlippage: ' + slipLiq)
 
 const calcDistanceToLiq = (marginRatio) => {
     
@@ -112,8 +120,12 @@ const calcDistanceToLiq = (marginRatio) => {
     
 }
 
-const getMarginRatio = (positions: Array<UserPosition>) => {
-    return positions.reduce(
+const getMarginRatio = (pub: string) => {
+    const user = users.get(pub)
+    const positions = user.positions;
+    const account = user.account;
+
+    const totalPositionValue = positions.reduce(
         (positionValue, marketPosition) => {
             const market = _.clearingHouse.getMarket(marketPosition.marketIndex);
             return positionValue.add(
@@ -122,6 +134,24 @@ const getMarginRatio = (positions: Array<UserPosition>) => {
         },
         ZERO
     );
+
+    if (totalPositionValue.eq(ZERO)) {
+        return BN_MAX;
+    }
+
+    const unrealizedPNL = positions.reduce((pnl, marketPosition) => {
+        const market = _.clearingHouse.getMarket(marketPosition.marketIndex);
+        return pnl.add(
+            calculatePositionPNL(market, marketPosition, true)
+        );
+    }, ZERO);
+
+    const totalCollateral = (
+        account.collateral.add(unrealizedPNL) ??
+        new BN(0)
+    );
+
+    return totalCollateral.mul(TEN_THOUSAND).div(totalPositionValue);
 }
 
 
@@ -147,19 +177,15 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
         (async () => {
             const promises = await Promise.all(filtered.map(([publicKey, distance]) : Promise<number> => { 
                 return new Promise((innerResolve) => {
-                    const userPositionArray = userPositions.get(publicKey) 
-                    if (userPositionArray.length > 0) {
-                        // send liquidation early to try to front run
-                        const marginRatio = getMarginRatio(userPositionArray)
-                        const closeToLiquidation = marginRatio.lte(new BN(slipLiq))
-                        innerResolve(marginRatio.toNumber()/100)
-                        // if the user can be liquidated, liquidate
-                        // else update their liquidation distance
-                        if (closeToLiquidation) {
-                            liq(new PublicKey(publicKey), publicKey, distance)
-                        } else {
-                            usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
-                        }
+                    const marginRatio = getMarginRatio(publicKey)
+                    const closeToLiquidation = marginRatio.lte(new BN(slipLiq))
+                    innerResolve(marginRatio.toNumber()/100)
+                    // if the user can be liquidated, liquidate
+                    // else update their liquidation distance
+                    if (closeToLiquidation) {
+                        liq(new PublicKey(publicKey), publicKey, distance, marginRatio, slipLiq)
+                    } else {
+                        usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
                     }
                     
                 })
@@ -190,7 +216,7 @@ const startWorker = () => {
 
 
         const checkUsers = () => {
-            if (userPositions.size > 0 && !botStopped) {
+            if (users.size > 0 && !botStopped) {
                 checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
                     intervalCount++
                     numUsersChecked.push(Number(numOfUsersChecked))
@@ -207,11 +233,9 @@ const startWorker = () => {
 
 
         const updateUsers = () => {
-            if (userPositions.size > 0 && !botStopped) {
+            if (users.size > 0 && !botStopped) {
                 (async() => {
-                    await Promise.all([...userPositions].map(([publicKey, userPositionArray]) => {
-                        return new Promise(resolve => resolve(usersLiquidationDistance.set(publicKey, calcDistanceToLiq(getMarginRatio(userPositionArray)))))
-                    }))
+                    await Promise.all([...users.keys()].map(publicKey => new Promise(resolve => resolve(usersLiquidationDistance.set(publicKey, calcDistanceToLiq(getMarginRatio(publicKey)))))))
                 })()
             }
             
@@ -232,13 +256,15 @@ const startWorker = () => {
                 workerLoopTimeInMinutes: workerLoopTimeInMinutes,
                 checked: {
                     min: Math.min(...numUsersChecked).toFixed(2),
-                    avg: parseInt((numUsersChecked.reduce((a, b) => a+b, 0)/intervalCount)+"").toFixed(2),
-                    max: Math.max(...numUsersChecked).toFixed(2)
+                    avg: parseInt((numUsersChecked.reduce((a, b) => a+b, 0)/intervalCount)+""),
+                    max: Math.max(...numUsersChecked).toFixed(2),
+                    total: parseInt((numUsersChecked.reduce((a, b) => a+b, 0))+""),
                 },
                 time: {
                     min: Math.min(...totalTime).toFixed(2),
                     avg: (totalTime.reduce((a, b) => a+b, 0)/intervalCount).toFixed(2),
-                    max: Math.max(...totalTime).toFixed(2)
+                    max: Math.max(...totalTime).toFixed(2),
+                    total: (totalTime.reduce((a, b) => a+b, 0)).toFixed(2),
                 },
                 margin: {
                     min: Math.min(...avgMarginRatio).toFixed(2),
@@ -246,9 +272,19 @@ const startWorker = () => {
                     max: Math.max(...avgMarginRatio).toFixed(2)
                 }
             }
-            const x = `cnt | usr | ms | %\n` + 
-            `${intervalCount} | ${data.checked.max} | ${data.time.max} | ${data.margin.max}`
-            console.log(x);
+            const x = {
+                worker: uuid,
+                data: {
+                    userCount: users.size,
+                    intervalCount: intervalCount,
+                    usersChecked: data.checked.avg,
+                    totalTime: data.time.total,
+                    minMargin: data.margin.min,
+                    slipLiq: (slipLiq/100).toFixed(4),
+                    avgCheckMsPerUser: ((data.checked.avg / users.size) / Number(data.time.total)).toFixed(2)
+                }
+            }
+            console.log(JSON.stringify(x))
             const liqStorage = localStorage.getItem('liquidations');
             
             if (liqStorage !== undefined && liqStorage !== null) {
@@ -271,25 +307,27 @@ const startWorker = () => {
     })
     
 }
-const processMessage = (pub : string, userPositionArray : Array<UserPosition>) => {
-    userPositions.set(pub, userPositionArray.map((up) => {
-       return {
-        baseAssetAmount: new BN(up.baseAssetAmount, 16),
-        lastCumulativeFundingRate: new BN(up.lastCumulativeFundingRate, 16),
-        marketIndex: new BN(up.marketIndex, 16),
-        quoteAssetAmount: new BN(up.quoteAssetAmount, 16)
-       }
-    }));
+const processMessage = (dataSource: string, pub : string, ipcUserAccount?: IPC_UserAccount, ipcUserPositionArray?: Array<IPC_UserPosition>) => {
+    const user = users.get(pub) || { positions: [] as Array<UserPosition>, account: {} as UserAccount } as User
+    if (ipcUserPositionArray.length > 0) {
+        user.positions = ipcUserPositionArray.map(convertUserPositionFromIPC)
+    }
+    if (ipcUserAccount !== null) {
+        user.account = convertUserAccountFromIPC(ipcUserAccount)
+    }
+    // console.log(dataSource, JSON.stringify(user))
+    users.set(pub, user);
 }
 
 interface MessageData {
+    dataSource: string,
     pub: string,
-    userPositionArray: Array<UserPosition>
+    userPositionArray?: Array<IPC_UserPosition>
+    userAccount?: IPC_UserAccount
 }
 
 process.on('message', (data : MessageData) => {
-    // console.log(data.userPositionArray)
-    processMessage(data.pub, data.userPositionArray)
+    processMessage(data.dataSource, data.pub, data.userAccount, data.userPositionArray)
 })
 
 startWorker()

@@ -1,21 +1,24 @@
 import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
 import Spinnies from 'spinnies';
-import fs from 'fs'
-
+import fs from 'fs-extra'
+fs.emptyDir(process.cwd() + '\\src\\logs\\err\\')
+fs.emptyDir(process.cwd() + '\\src\\logs\\worker\\')
 const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
 spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
-import readline from "readline";
-
 import { randomUUID } from 'crypto'
-import { ClearingHouseUser, ClearingHouse, UserAccount, UserPositionsAccount } from '@drift-labs/sdk';
+import { ClearingHouseUser, UserAccount, UserPositionsAccount } from '@drift-labs/sdk';
 import { PublicKey } from '@solana/web3.js';
 
-import clearingHouse, { default as _ } from './clearingHouse.js'
+import { default as _ } from './clearingHouse.js'
 
 import { LocalStorage } from 'node-localstorage';
 const localStorage = new LocalStorage('./storage');
+
+import { convertUserAccount, convertUserPosition } from './ipcInterface.js';
+
+import table from './util/table.js'
 
 // CONFIG THE LOOP
 const userUpdateTimeInMinutes = 60
@@ -33,15 +36,25 @@ const checkUsersInMS = 5
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = 5
+const minLiquidationDistance = 10
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.0005 = (625.3125)
 // essentially trying to frontrun the transaction 
 const partialLiquidationSlippage = 0.005
 
+const workerCount = 10
+
+const splitUsersBetweenWorkers = true
+
 
 
 const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
+const activeUserEventListeners : Map<string, ActiveListeners> = new Map<string, ActiveListeners>();
+
+interface ActiveListeners { 
+    userAccountData: boolean,
+    userPositionsData: boolean
+}
 
 // loop to subscribe users, sometimes there are errors
 // so users who were unable to be subscribed to will be subscribed to in the next loop
@@ -58,6 +71,46 @@ const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: stri
             }
         })
     })
+}
+
+const assignUserToWorker = (pub: PublicKey, user: ClearingHouseUser) => {
+    const indexOfUser = [...users.keys()].indexOf(pub.toBase58())
+    const workerIndex = indexOfUser % workerCount
+    const workerAssignedUUID = [...workers.keys()][workerIndex]
+    const activeListeners = activeUserEventListeners.get(pub.toBase58()) || { userPositionsData: false, userAccountData: false } as ActiveListeners
+    if (!activeListeners.userPositionsData) {
+        user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
+            if (splitUsersBetweenWorkers) {
+                workers.get(workerAssignedUUID).send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
+            } else {
+                workers.forEach(worker => {
+                    worker.send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
+                })
+            }
+            
+        })
+        activeListeners.userPositionsData = true
+    }
+    if (!activeListeners.userAccountData) {
+        user.accountSubscriber.eventEmitter.on("userAccountData", (payload:UserAccount) => {
+            if (splitUsersBetweenWorkers) {
+                workers.get(workerAssignedUUID).send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
+            } else {
+                workers.forEach(worker => {
+                    worker.send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
+                })
+            }
+        })
+        activeListeners.userAccountData = true
+    }
+    activeUserEventListeners.set(pub.toBase58(), activeListeners);
+    if (splitUsersBetweenWorkers) {
+        workers.get(workerAssignedUUID).send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
+    } else {
+        workers.forEach(worker => {
+            worker.send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
+        })
+    }
 }
 
 // subscribe to all the users and check if they can be liquidated
@@ -87,20 +140,8 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                     return
                 }
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
-                    user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
-                        let mappedPositions = payload.positions.map(position => {
-                            return { 
-                                baseAssetAmount: position.baseAssetAmount.toJSON(),
-                                lastCumulativeFundingRate: position.lastCumulativeFundingRate.toJSON(),
-                                marketIndex: position.marketIndex.toJSON(),
-                                quoteAssetAmount: position.quoteAssetAmount.toJSON()
-                            }
-                        })
-                        workers.forEach(worker => {
-                            worker.send({ pub: pub.toBase58(), userPositionArray: mappedPositions})
-                        })
-                    })
                     countSubscribed++
+                    assignUserToWorker(pub, user)
                     if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
                         setTimeout(() => {
                             resolve(failedToSubscribe)
@@ -113,22 +154,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                             return
                         }
                         users.set(pub.toBase58(), user);
-                        if (user.isSubscribed) {
-                            user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
-                                let mappedPositions = payload.positions.map(position => {
-                                    return { 
-                                        baseAssetAmount: position.baseAssetAmount.toJSON(),
-                                        lastCumulativeFundingRate: position.lastCumulativeFundingRate.toJSON(),
-                                        marketIndex: position.marketIndex.toJSON(),
-                                        quoteAssetAmount: position.quoteAssetAmount.toJSON()
-                                    }
-                                })
-                                workers.forEach(worker => {
-                                    worker.send({ pub: pub.toBase58(), userPositionArray: mappedPositions})
-                                })
-                            })
-                        }
-                        
+                        assignUserToWorker(pub, user)
                         countSubscribed++
                         if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
                             setTimeout(() => {
@@ -170,9 +196,10 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
 let botStopped = false;
 let start : [number, number] = [0, 0];
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
+const workerData : Map<string, string> = new Map<string, string>();
 const getNewUsers = (workerCount) => {
     console.clear()
-    spinnies.update('main', { status: 'spinning', text: 'updating user list' })
+    spinnies.update('main', { status: 'spinning', text: 'updating user list\n' + [userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage].join(' - ') + '\n' })
     const getUsers = exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
         if (stdout.includes('done')) {
             // spinnies.update('main', { status: 'succeed', text: 'updated user list from chain' })
@@ -182,14 +209,15 @@ const getNewUsers = (workerCount) => {
             })();
         }
     });
+    spinnies.add('workers', { text: ""})
     for(let x = workers.size; x < workerCount; x++) {
         let workerUUID = randomUUID()
         if (workerCount <= 10) {
-            spinnies.add(workerUUID.split('-').join('')+'', { text: 'worker - ' + workerUUID });
+            // spinnies.add(workerUUID.split('-').join('')+'', { text: 'worker - ' + workerUUID });
         }
         workers.set(workerUUID, 
             fork("./src/worker.js",
-                [workerUUID,userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*(x+1)].map(x => x + ""),
+                [workerUUID,userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
                 {
                     stdio: [ 'pipe', 'pipe', (() => {
                         if (fs.existsSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out')) {
@@ -201,15 +229,40 @@ const getNewUsers = (workerCount) => {
             )
         )
         const worker = workers.get(workerUUID)
-        worker.stdout.on('data', (data) => {
+        worker.stdout.on('data', (data : Buffer) => {
             if (fs.existsSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out')) {
                 fs.writeFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', '')
             }
             fs.appendFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', data)
             if (workerCount <= 10) {
-                spinnies.update(workerUUID.split('-').join(''), { text: 'worker - ' + workerUUID.substring(0, 8) + ' - ' + (partialLiquidationSlippage*(x+1)).toFixed(4) +  '\n' + data  })
-            } else if (data.includes('Liquidated')) {
-                spinnies.add('liquidation'+randomUUID().split('-')[0], { status: 'succeed', text: data })
+                // spinnies.update(workerUUID.split('-').join(''), { text: 'worker - ' + workerUUID.substring(0, 8) + ' - ' + (partialLiquidationSlippage*(x+1)).toFixed(4) +  '\n' + data  })
+                if (data.toString('utf8').charCodeAt(0) === 123) {
+                    let d = JSON.parse(data.toString('utf8'))
+                    if (d.worker !== undefined && d.data !== undefined) {
+                        workerData.set(d.worker, JSON.stringify(d.data));
+                        console.clear();
+                        spinnies.update('workers', { text : table([...workerData].map(([wrkr, mapData]) => {
+                            let dataFromMap = JSON.parse(mapData)
+                            let r =  {
+                                "Worker": wrkr.split('-')[4],
+                                "Users Within Distance": dataFromMap.usersChecked,
+                                "Average Check MS per User": dataFromMap.avgCheckMsPerUser,
+                                "User Count": dataFromMap.userCount,
+                                "Times Checked": dataFromMap.intervalCount,
+                                "Total MS": dataFromMap.totalTime,
+                                "Smallest Margin %": dataFromMap.minMargin
+                            }
+                            if (!splitUsersBetweenWorkers) {
+                                r["Margin with Slippage"] =  dataFromMap.slipLiq
+                            }
+                            return r
+                        }).sort((a, b) => a["User Count"] - b["User Count"]))})
+                    }
+                }
+                
+                if (data.includes('Liquidated')) {
+                    spinnies.add('liquidation'+randomUUID().split('-')[0], { status: 'succeed', text: data })
+                }
             }
         })
         worker.stdout.on('close', (error) => {
@@ -236,58 +289,4 @@ const startLiquidationBot = (workerCount) => {
     })
 }
 
-let inputLoop = (spinnies) => {
-    if (botStopped) {
-        startQuestion(spinnies);
-    } else {
-        stopQuestion(spinnies);
-    }
-}
-
-let startQuestion = (spinnies) => {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
-    rl.question("type `start #` to start the bot with # of workers\n", function(input) {
-        if (input.includes('start')) {
-            botStopped = false
-            rl.close()
-            console.clear()
-            console.log('starting bot...')
-            let numberOfWorkers = 5;
-            let inputInt = parseInt(input.split('start ')[1])
-            if (inputInt !== NaN) {
-                numberOfWorkers = inputInt
-            }
-            startLiquidationBot(numberOfWorkers)
-        } else {
-            rl.close()
-            startQuestion(spinnies);
-        }
-    })
-}
-
-
-let stopQuestion = (spinnies) => {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
-    rl.question("type `stop` to stop the bot\n", function(input) {
-        if (input.toLowerCase() === 'stop') {
-            botStopped = true;
-            rl.close()
-            console.clear()
-            console.log('stopping bot...')
-            workers.forEach((worker) => worker.kill());
-            inputLoop(spinnies)
-        } else {
-            rl.close()
-            console.clear()
-            stopQuestion(spinnies);
-        }
-    })
-}
-
-startLiquidationBot(10)
+startLiquidationBot(workerCount)
