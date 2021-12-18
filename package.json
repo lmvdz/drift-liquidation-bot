@@ -2,10 +2,13 @@
   "name": "drift-liquidation-bot",
   "version": "1.0.0",
   "description": "",
-  "exports": "./src/index.ts",
+  "exports": [
+    "./src/index.ts",
+    "./src/getUsers.ts"
+  ],
   "type": "module",
   "scripts": {
-    "start": "node --no-warnings --loader ts-node/esm ./src/index.ts",
+    "start": "node  --loader ts-node/esm ./src/index.ts",
     "test": "node --no-warnings --loader ts-node/esm ./src/test.ts"
   },
   "author": "",
@@ -18,7 +21,6 @@
     "@solana/web3.js": "^1.31.0",
     "dotenv": "^10.0.0",
     "node-localstorage": "^2.2.1",
-    "ora": "^6.0.1",
     "spinnies": "^0.5.1",
     "ts-node": "^10.4.0"
   },
