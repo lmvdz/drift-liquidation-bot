@@ -273,13 +273,12 @@ const startWorker = () => {
 const processMessage = (pub : string, userPositionArray : Array<UserPosition>) => {
     userPositions.set(pub, userPositionArray.map((up) => {
        return {
-        baseAssetAmount: new BN(up.baseAssetAmount),
-        lastCumulativeFundingRate: new BN(up.lastCumulativeFundingRate),
-        marketIndex: new BN(up.marketIndex),
-        quoteAssetAmount: new BN(up.quoteAssetAmount)
+        baseAssetAmount: new BN(up.baseAssetAmount, 16),
+        lastCumulativeFundingRate: new BN(up.lastCumulativeFundingRate, 16),
+        marketIndex: new BN(up.marketIndex, 16),
+        quoteAssetAmount: new BN(up.quoteAssetAmount, 16)
        }
     }));
-    console.log(userPositions.get(pub))
 }
 
 interface MessageData {
@@ -288,6 +287,7 @@ interface MessageData {
 }
 
 process.on('message', (data : MessageData) => {
+    // console.log(data.userPositionArray)
     processMessage(data.pub, data.userPositionArray)
 })
 

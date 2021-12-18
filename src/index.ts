@@ -88,8 +88,16 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                 }
                 if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
                     user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
+                        let mappedPositions = payload.positions.map(position => {
+                            return { 
+                                baseAssetAmount: position.baseAssetAmount.toJSON(),
+                                lastCumulativeFundingRate: position.lastCumulativeFundingRate.toJSON(),
+                                marketIndex: position.marketIndex.toJSON(),
+                                quoteAssetAmount: position.quoteAssetAmount.toJSON()
+                            }
+                        })
                         workers.forEach(worker => {
-                            worker.send({ pub: pub.toBase58(), userPositionArray: payload.positions})
+                            worker.send({ pub: pub.toBase58(), userPositionArray: mappedPositions})
                         })
                     })
                     countSubscribed++
@@ -107,8 +115,16 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                         users.set(pub.toBase58(), user);
                         if (user.isSubscribed) {
                             user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
+                                let mappedPositions = payload.positions.map(position => {
+                                    return { 
+                                        baseAssetAmount: position.baseAssetAmount.toJSON(),
+                                        lastCumulativeFundingRate: position.lastCumulativeFundingRate.toJSON(),
+                                        marketIndex: position.marketIndex.toJSON(),
+                                        quoteAssetAmount: position.quoteAssetAmount.toJSON()
+                                    }
+                                })
                                 workers.forEach(worker => {
-                                    worker.send({ pub: pub.toBase58(), userPositionArray: payload.positions})
+                                    worker.send({ pub: pub.toBase58(), userPositionArray: mappedPositions})
                                 })
                             })
                         }
