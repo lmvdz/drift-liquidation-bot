@@ -42,7 +42,7 @@ const minLiquidationDistance = 10
 // essentially trying to frontrun the transaction 
 const partialLiquidationSlippage = 0.005
 
-const workerCount = 10
+const workerCount = 30
 
 const splitUsersBetweenWorkers = true
 
@@ -234,42 +234,34 @@ const getNewUsers = (workerCount) => {
                 fs.writeFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', '')
             }
             fs.appendFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', data)
-            if (workerCount <= 10) {
-                // spinnies.update(workerUUID.split('-').join(''), { text: 'worker - ' + workerUUID.substring(0, 8) + ' - ' + (partialLiquidationSlippage*(x+1)).toFixed(4) +  '\n' + data  })
-                if (data.toString('utf8').charCodeAt(0) === 123) {
-                    let d = JSON.parse(data.toString('utf8'))
-                    if (d.worker !== undefined && d.data !== undefined) {
-                        workerData.set(d.worker, JSON.stringify(d.data));
-                        console.clear();
-                        spinnies.update('workers', { text : table([...workerData].map(([wrkr, mapData]) => {
-                            let dataFromMap = JSON.parse(mapData)
-                            let r =  {
-                                "Worker": wrkr.split('-')[4],
-                                // "Users Within Distance": dataFromMap.usersChecked,
-                                "User Count": dataFromMap.userCount,
-                                "Times Checked": dataFromMap.intervalCount,
-                                "Total MS": dataFromMap.totalTime,
-                                "Check MS per User": dataFromMap.avgCheckMsPerUser,
-                                // "Smallest Margin %": dataFromMap.minMargin
-                            }
-                            if (!splitUsersBetweenWorkers) {
-                                r["Margin with Slippage"] =  dataFromMap.slipLiq
-                            }
-                            return r
-                        }).sort((a, b) => a["User Count"] - b["User Count"]))})
-                    }
+            if (data.toString('utf8').charCodeAt(0) === 123) {
+                let d = JSON.parse(data.toString('utf8'))
+                if (d.worker !== undefined && d.data !== undefined) {
+                    workerData.set(d.worker, JSON.stringify(d.data));
+                    console.clear();
+                    spinnies.update('workers', { text : table([...workerData].map(([wrkr, mapData]) => {
+                        let dataFromMap = JSON.parse(mapData)
+                        let r =  {
+                            "Worker": wrkr.split('-')[4],
+                            "Users Within Range": dataFromMap.usersChecked,
+                            "User Count": dataFromMap.userCount,
+                            "Times Checked": dataFromMap.intervalCount,
+                            "Min Avg Max Total MS": dataFromMap.totalTime,
+                            "User Check MS": dataFromMap.avgCheckMsPerUser,
+                            "Smallest Margin %": dataFromMap.minMargin,
+                            "Liq Slip Margin %": dataFromMap.slipLiq
+                        }
+                        return r
+                    }).sort((a, b) => b["User Count"] - a["User Count"]))})
                 }
-                
-                if (data.includes('Liquidated')) {
-                    spinnies.add('liquidation'+randomUUID().split('-')[0], { status: 'succeed', text: data })
-                }
+            }
+            
+            if (data.includes('Liquidated')) {
+                spinnies.add('liquidation'+randomUUID().split('-')[0], { status: 'succeed', text: data })
             }
         })
         worker.stdout.on('close', (error) => {
             worker.kill()
-            if (workerCount <= 10) {
-                delete spinnies.spinners[workerUUID.split('-').join('')+''];
-            }
         })
     }
     start = process.hrtime();

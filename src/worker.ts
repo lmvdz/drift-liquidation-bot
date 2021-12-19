@@ -82,20 +82,24 @@ const getLiqTransactionProfit = (tx:string) : Promise<number> => {
 }
 
 // liquidation helper function
-const liq = (pub:PublicKey, user:string, distance:number, marginRatio: BN, slipLiq: number) => {
-    _.clearingHouse.liquidate(pub).then((tx) => {
-        getLiqTransactionProfit(tx).then((balanceChange : number) => {
-            let liquidationStorage = JSON.parse(localStorage.getItem('liquidations'))
-            if (!liquidationStorage.some(liquidation => liquidation.tx === tx)) {
-                liquidationStorage.push({ pub: pub.toBase58(), tx, balanceChange })
-            }
-            localStorage.setItem('liquidations', JSON.stringify(liquidationStorage))
-            console.log(`${new Date()} - Liquidated user: ${user} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
-        })
-    }).catch(error => {
-        if (error.message.includes('custom program error: 0x130'))
-            console.log(`Frontrun failed, sufficient collateral -- ${distance} -- ${marginRatio.toNumber()} -- ${slipLiq}`)
-    });
+const liq = (pub:PublicKey, user:string, distance:number, marginRatio: BN, slipLiq: number) : Promise<void> => {
+    return new Promise((resolve, reject) => {
+        _.clearingHouse.liquidate(pub).then((tx) => {
+            getLiqTransactionProfit(tx).then((balanceChange : number) => {
+                let liquidationStorage = JSON.parse(localStorage.getItem('liquidations'))
+                if (!liquidationStorage.some(liquidation => liquidation.tx === tx)) {
+                    liquidationStorage.push({ pub: pub.toBase58(), tx, balanceChange })
+                }
+                localStorage.setItem('liquidations', JSON.stringify(liquidationStorage))
+                console.log(`${new Date()} - Liquidated user: ${user} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
+                resolve()
+            })
+        }).catch(error => {
+            if (error.message.includes('custom program error: 0x130'))
+                console.log(`Frontrun failed, sufficient collateral -- ${distance} -- ${marginRatio.toNumber()} -- ${slipLiq}`)
+            resolve()
+        });
+    })
 }
 
 // if the margin ratio is less than the liquidation ratio just return 1 to move it to the front of the liquidation distance array
@@ -173,17 +177,19 @@ const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time:
         });
 
         (async () => {
-            const promises = await Promise.all(filtered.map(([publicKey, distance]) : Promise<number> => { 
+            const promises = await Promise.all([...usersLiquidationDistance].map(([publicKey, distance]) : Promise<number> => { 
                 return new Promise((innerResolve) => {
                     const marginRatio = getMarginRatio(publicKey)
                     const closeToLiquidation = marginRatio.lte(new BN(slipLiq))
-                    innerResolve(marginRatio.toNumber()/100)
                     // if the user can be liquidated, liquidate
                     // else update their liquidation distance
                     if (closeToLiquidation) {
-                        liq(new PublicKey(publicKey), publicKey, distance, marginRatio, slipLiq)
+                        liq(new PublicKey(publicKey), publicKey, distance, marginRatio, slipLiq).then(() => {
+                            innerResolve(marginRatio.toNumber()/100)
+                        })
                     } else {
                         usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
+                        innerResolve(marginRatio.toNumber()/100)
                     }
                     
                 })
@@ -218,7 +224,8 @@ const startWorker = () => {
                 checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
                     intervalCount++
                     numUsersChecked.push(Number(numOfUsersChecked))
-                    avgMarginRatio.push(Number(averageMarginRatio))
+                    if (averageMarginRatio !== 0)
+                        avgMarginRatio.push(Number(averageMarginRatio))
                     totalTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
                 })
             }
@@ -249,25 +256,24 @@ const startWorker = () => {
             const timeFromStartToEndOfFirstLoop = process.hrtime(start)
             const data = {
                 total: '',
-                loopTime: ((Number(timeFromStartToEndOfFirstLoop[0]) + ((Number(timeFromStartToEndOfFirstLoop[1] / 1000000) / 1000)))  / 60).toFixed(2),
                 intervalCount,
                 workerLoopTimeInMinutes: workerLoopTimeInMinutes,
                 checked: {
-                    min: Math.min(...numUsersChecked).toFixed(2),
-                    avg: parseInt((numUsersChecked.reduce((a, b) => a+b, 0)/intervalCount)+""),
-                    max: Math.max(...numUsersChecked).toFixed(2),
+                    min: Math.min(...numUsersChecked),
+                    avg: (numUsersChecked.reduce((a, b) => a+b, 0)/numUsersChecked.length).toFixed(2),
+                    max: Math.max(...numUsersChecked),
                     total: parseInt((numUsersChecked.reduce((a, b) => a+b, 0))+""),
                 },
                 time: {
                     min: Math.min(...totalTime).toFixed(2),
-                    avg: (totalTime.reduce((a, b) => a+b, 0)/intervalCount).toFixed(2),
+                    avg: (totalTime.reduce((a, b) => a+b, 0)/totalTime.length).toFixed(2),
                     max: Math.max(...totalTime).toFixed(2),
                     total: (totalTime.reduce((a, b) => a+b, 0)).toFixed(2),
                 },
                 margin: {
-                    min: Math.min(...avgMarginRatio).toFixed(2),
-                    avg: ((avgMarginRatio.reduce((a, b) => a+b, 0)/intervalCount)).toFixed(2),
-                    max: Math.max(...avgMarginRatio).toFixed(2)
+                    min: Math.min(...avgMarginRatio),
+                    avg: ((avgMarginRatio.reduce((a, b) => a+b, 0)/avgMarginRatio.length)).toFixed(2),
+                    max: Math.max(...avgMarginRatio)
                 }
             }
             const x = {
@@ -275,11 +281,11 @@ const startWorker = () => {
                 data: {
                     userCount: users.size,
                     intervalCount: intervalCount,
-                    usersChecked: data.checked.avg,
-                    totalTime: data.time.total,
-                    minMargin: data.margin.min,
+                    usersChecked: data.checked.min + ' ' + data.checked.avg + ' ' + data.checked.max,
+                    totalTime: data.time.min + ' ' + data.time.avg + ' ' + data.time.max + ' ' + data.time.total,
+                    minMargin: Math.min(0, data.margin.min) + ' ' + data.margin.avg + ' ' + Math.max(0, data.margin.max),
                     slipLiq: (slipLiq/100).toFixed(4),
-                    avgCheckMsPerUser: ((intervalCount / users.size) / parseFloat(data.time.total)).toFixed(4)
+                    avgCheckMsPerUser: ( parseFloat(data.time.total) / (intervalCount *  (users.size)) ).toFixed(6)
                 }
             }
             console.log(JSON.stringify(x))
