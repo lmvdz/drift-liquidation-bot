@@ -42,7 +42,7 @@ const minLiquidationDistance = 10
 // essentially trying to frontrun the transaction 
 const partialLiquidationSlippage = 0.005
 
-const workerCount = 30
+const workerCount = 10
 
 const splitUsersBetweenWorkers = true
 
