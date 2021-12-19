@@ -246,10 +246,11 @@ const startWorker = () => {
             
         }
 
-        // update all users liquidation distance every minute
-        updateUsersLiquidationDistanceInterval = setInterval(() => {
-            updateUsers();
-        }, 60 * 1000 * updateLiquidationDistanceInMinutes)
+        // dont need to call this since we're checking every user
+        // update all users liquidation distance every x minutes
+        // updateUsersLiquidationDistanceInterval = setInterval(() => {
+        //     updateUsers();
+        // }, 60 * 1000 * updateLiquidationDistanceInMinutes)
 
 
         sendDataInterval = setInterval(() => {
