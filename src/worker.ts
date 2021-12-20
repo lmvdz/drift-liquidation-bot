@@ -7,9 +7,13 @@ import {PublicKey, TransactionResponse } from '@solana/web3.js'
 import {
     BN_MAX,
     calculateBaseAssetValue,
-    calculatePositionPNL,
-    ClearingHouseUser, 
+    calculatePositionFundingPNL,
+    Market,
+    Markets,
+    ClearingHouseUser,
     PARTIAL_LIQUIDATION_RATIO,
+    PositionDirection,
+    PRICE_TO_QUOTE_PRECISION,
     TEN_THOUSAND,
     UserAccount,
     UserPosition,
@@ -53,7 +57,8 @@ const partialLiquidationSlippage = parseFloat(args[5])
 
 interface User {
     account: UserAccount,
-    positions: Array<UserPosition>
+    positions: Array<UserPosition>,
+    eventListeners: Array<EventListener>
 }
 // setup bot state
 const users : Map<string, User> = new Map<string, User>();
@@ -69,7 +74,7 @@ const usersLiquidationDistance : Map<string, number> =  new Map<string, number>(
 
 const getLiqTransactionProfit = (tx:string) : Promise<number> => {
     return new Promise((resolve, reject) => {
-        _.mainnetConnection.getTransaction(tx).then((transaction : TransactionResponse) => {
+        _.genesysgoConnection.getTransaction(tx).then((transaction : TransactionResponse) => {
             let clearingHouseUserPreTokenBalance : number = parseFloat(transaction.meta.preTokenBalances[0].uiTokenAmount.uiAmountString)
             let clearingHouseUserPostTokenBalance : number = parseFloat(transaction.meta.postTokenBalances[0].uiTokenAmount.uiAmountString)
             let balanceChange = clearingHouseUserPreTokenBalance - clearingHouseUserPostTokenBalance;
@@ -80,23 +85,33 @@ const getLiqTransactionProfit = (tx:string) : Promise<number> => {
     })
     
 }
+const invert  = p  => new Promise((res, rej) => p.then(rej, res));
+const firstOf = ps => invert(Promise.all(ps.map(invert)));
+
 
 // liquidation helper function
-const liq = (pub:PublicKey, user:string, distance:number, marginRatio: BN, slipLiq: number) : Promise<void> => {
+const liq = (pub:PublicKey) : Promise<void> => {
     return new Promise((resolve, reject) => {
-        _.clearingHouse.liquidate(pub).then((tx) => {
+        firstOf([_.rpcPoolClearingHouse.liquidate(pub), _.genesysgoClearingHouse.liquidate(pub)]).then((tx : string) => {
             getLiqTransactionProfit(tx).then((balanceChange : number) => {
-                let liquidationStorage = JSON.parse(localStorage.getItem('liquidations'))
+                let liquidationStorage = localStorage.getItem('liquidations');
+                if (liquidationStorage === undefined || liquidationStorage == null) {
+                    liquidationStorage = []
+                } else {
+                    liquidationStorage = JSON.parse(liquidationStorage)
+                }
+                
                 if (!liquidationStorage.some(liquidation => liquidation.tx === tx)) {
                     liquidationStorage.push({ pub: pub.toBase58(), tx, balanceChange })
                 }
+
                 localStorage.setItem('liquidations', JSON.stringify(liquidationStorage))
-                console.log(`${new Date()} - Liquidated user: ${user} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
+                // console.log(`${new Date()} - Liquidated user: ${user} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
                 resolve()
             })
         }).catch(error => {
-            if (error.message.includes('custom program error: 0x130'))
-                console.log(`Frontrun failed, sufficient collateral -- ${distance} -- ${marginRatio.toNumber()} -- ${slipLiq}`)
+            // if (error.message.includes('custom program error: 0x130'))
+                // console.log(`Frontrun failed, sufficient collateral -- ${distance} -- ${marginRatio.toNumber()} -- ${slipLiq}`)
             resolve()
         });
     })
@@ -107,53 +122,88 @@ const liq = (pub:PublicKey, user:string, distance:number, marginRatio: BN, slipL
 // use div and mod to get the decimal values
 
 const partialLiquidationWithSlippage = () => {
-    return PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100))
+    return PARTIAL_LIQUIDATION_RATIO.mul(new BN((1 + (partialLiquidationSlippage/100))))
 }
 
 const slipLiq = partialLiquidationWithSlippage()
 
 const calcDistanceToLiq = (marginRatio) => {
-    
-    if (marginRatio.toNumber() <= slipLiq) {
+    if (marginRatio.eq(BN_MAX)) {
+        return -1
+    } else if (marginRatio.lte(slipLiq)) {
         return 1
     } else {
-        return marginRatio.div(new BN(slipLiq)).toNumber() + marginRatio.mod(new BN(slipLiq)).toNumber()
+        return marginRatio.div(slipLiq).add(marginRatio.mod(slipLiq)).toNumber()
     }
     
+}
+
+
+const calculatePositionPNL = (
+	market: Market,
+	marketPosition: UserPosition,
+    baseAssetValue: BN,
+	withFunding = false
+): BN  => {
+	if (marketPosition.baseAssetAmount.eq(ZERO)) {
+		return ZERO;
+	}
+
+	const directionToClose = marketPosition.baseAssetAmount.gt(ZERO)
+		? PositionDirection.SHORT
+		: PositionDirection.LONG;
+
+	let pnlAssetAmount;
+
+	switch (directionToClose) {
+		case PositionDirection.SHORT:
+			pnlAssetAmount = baseAssetValue.sub(marketPosition.quoteAssetAmount);
+			break;
+
+		case PositionDirection.LONG:
+			pnlAssetAmount = marketPosition.quoteAssetAmount.sub(baseAssetValue);
+			break;
+	}
+
+	if (withFunding) {
+		const fundingRatePnL = calculatePositionFundingPNL(
+			market,
+			marketPosition
+		).div(PRICE_TO_QUOTE_PRECISION);
+
+		pnlAssetAmount = pnlAssetAmount.add(fundingRatePnL);
+	}
+
+	return pnlAssetAmount;
 }
 
 const getMarginRatio = (pub: string) => {
     const user = users.get(pub)
     const positions = user.positions;
-    const account = user.account;
 
-    const totalPositionValue = positions.reduce(
-        (positionValue, marketPosition) => {
-            const market = _.clearingHouse.getMarket(marketPosition.marketIndex);
-            return positionValue.add(
-                calculateBaseAssetValue(market, marketPosition)
-            );
-        },
-        ZERO
-    );
+    if (positions.length === 0) {
+        return BN_MAX;
+    }
+
+    let totalPositionValue = ZERO, unrealizedPNL = ZERO
+
+    positions.forEach(position => {
+        const market = _.genesysgoClearingHouse.getMarket(position.marketIndex);
+        const baseAssetAmountValue = calculateBaseAssetValue(market, position);
+        const pnl = calculatePositionPNL(market, position, baseAssetAmountValue, true)
+        totalPositionValue = totalPositionValue.add(baseAssetAmountValue)
+        unrealizedPNL = unrealizedPNL.add(pnl)
+    })
 
     if (totalPositionValue.eq(ZERO)) {
         return BN_MAX;
     }
 
-    const unrealizedPNL = positions.reduce((pnl, marketPosition) => {
-        const market = _.clearingHouse.getMarket(marketPosition.marketIndex);
-        return pnl.add(
-            calculatePositionPNL(market, marketPosition, true)
-        );
-    }, ZERO);
-
-    const totalCollateral = (
-        account.collateral.add(unrealizedPNL) ??
+    let marginRatio = (
+        user.account.collateral.add(unrealizedPNL) ??
         new BN(0)
-    );
-
-    return totalCollateral.mul(TEN_THOUSAND).div(totalPositionValue);
+    ).mul(TEN_THOUSAND).div(totalPositionValue);
+    return marginRatio;
 }
 
 
@@ -164,175 +214,188 @@ const getMarginRatio = (pub: string) => {
 // add the new users to the storage
 // maybe one day only request users which are not in storage
 
-// based on liquidation distance check users for liquidation
-const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number], averageMarginRatio: number }> => {
-    return new Promise((resolve, reject) => {
-        var hrstart = process.hrtime()
 
-        // map the users to check to their ClearingHouseUser
-        // and filter out the high margin ratio users
-        
-        const filtered = [...usersLiquidationDistance].filter(([publicKey, distance]) => { 
-            return distance < minLiquidationDistance 
-        });
+const filtered = () => [...usersLiquidationDistance].filter(([, distance]) => { 
+    return distance > 0 && distance < minLiquidationDistance
+});
 
-        (async () => {
-            const promises = await Promise.all([...usersLiquidationDistance].map(([publicKey, distance]) : Promise<number> => { 
-                return new Promise((innerResolve) => {
-                    const marginRatio = getMarginRatio(publicKey)
-                    const closeToLiquidation = marginRatio.lte(new BN(slipLiq))
-                    // if the user can be liquidated, liquidate
-                    // else update their liquidation distance
-                    if (closeToLiquidation) {
-                        liq(new PublicKey(publicKey), publicKey, distance, marginRatio, slipLiq).then(() => {
-                            innerResolve(marginRatio.toNumber()/100)
-                        })
-                    } else {
-                        usersLiquidationDistance.set(publicKey, calcDistanceToLiq(marginRatio))
-                        innerResolve(marginRatio.toNumber()/100)
-                    }
-                    
-                })
-            }))
-            resolve({numOfUsersChecked: filtered.length, time: process.hrtime(hrstart), averageMarginRatio: promises.reduce((a : number, b : number) => a + b, 0) })
+const prioSet : Set<string> = new Set();
+
+const checkUserPriorityLoop = (pub) => {
+    if (prioSet.has(pub)) {
+        ;( async () => {
+            liq(pub)
+            checkUserPriorityLoop(pub)
         })();
-        
-        
-        
-    })
+    }
 }
 
-
-// interval timer state variables
-let checkUsersInterval : NodeJS.Timer;
-let updateUsersLiquidationDistanceInterval : NodeJS.Timer;
-let sendDataInterval : NodeJS.Timer;
-let botStopped = false;
-let start : [number, number] = [0, 0];
-// liquidation bot, where the magic happens
-const startWorker = () => {
-    _.clearingHouse.subscribe().then(() => {
-        // prepare variables for liquidation loop
-        let intervalCount = 0
-        let numUsersChecked = new Array<number>();
-        let totalTime = new Array<number>();
-        let avgMarginRatio = new Array<number>();
-
-
-        const checkUsers = () => {
-            if (users.size > 0 && !botStopped) {
-                checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
-                    intervalCount++
-                    numUsersChecked.push(Number(numOfUsersChecked))
-                    if (averageMarginRatio !== 0)
-                        avgMarginRatio.push(Number(averageMarginRatio))
-                    totalTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
+const checkUser = (pub) : Promise<number> => {
+    return new Promise((resolve) => {
+        const marginRatio = getMarginRatio(pub)
+        const closeToLiquidation = marginRatio.lte(new BN(slipLiq))
+        usersLiquidationDistance.set(pub, calcDistanceToLiq(marginRatio))
+        if (closeToLiquidation) {
+            if (!prioSet.has(pub)) {
+                prioSet.add(pub);
+                (async () => {
+                    checkUserPriorityLoop(pub)
                 })
+            } else if (!closeToLiquidation) {
+                prioSet.delete(pub)
             }
-            
         }
-
-        checkUsersInterval = setInterval(() => {
-            checkUsers();
-        }, checkUsersInMS)
-
-
-        const updateUsers = () => {
-            if (users.size > 0 && !botStopped) {
-                (async() => {
-                    await Promise.all([...users.keys()].map(publicKey => new Promise(resolve => resolve(usersLiquidationDistance.set(publicKey, calcDistanceToLiq(getMarginRatio(publicKey)))))))
-                })()
-            }
-            
-        }
-
-        // dont need to call this since we're checking every user
-        // update all users liquidation distance every x minutes
-        // updateUsersLiquidationDistanceInterval = setInterval(() => {
-        //     updateUsers();
-        // }, 60 * 1000 * updateLiquidationDistanceInMinutes)
-
-
-        sendDataInterval = setInterval(() => {
-            const timeFromStartToEndOfFirstLoop = process.hrtime(start)
-            const data = {
-                total: '',
-                intervalCount,
-                workerLoopTimeInMinutes: workerLoopTimeInMinutes,
-                checked: {
-                    min: Math.min(...numUsersChecked),
-                    avg: (numUsersChecked.reduce((a, b) => a+b, 0)/numUsersChecked.length).toFixed(2),
-                    max: Math.max(...numUsersChecked),
-                    total: parseInt((numUsersChecked.reduce((a, b) => a+b, 0))+""),
-                },
-                time: {
-                    min: Math.min(...totalTime).toFixed(2),
-                    avg: (totalTime.reduce((a, b) => a+b, 0)/totalTime.length).toFixed(2),
-                    max: Math.max(...totalTime).toFixed(2),
-                    total: (totalTime.reduce((a, b) => a+b, 0)).toFixed(2),
-                },
-                margin: {
-                    min: Math.min(...avgMarginRatio),
-                    avg: ((avgMarginRatio.reduce((a, b) => a+b, 0)/avgMarginRatio.length)).toFixed(2),
-                    max: Math.max(...avgMarginRatio)
-                }
-            }
-            const x = {
-                worker: uuid,
-                data: {
-                    userCount: users.size,
-                    intervalCount: intervalCount,
-                    usersChecked: data.checked.min + ' ' + data.checked.avg + ' ' + data.checked.max,
-                    totalTime: data.time.min + ' ' + data.time.avg + ' ' + data.time.max + ' ' + data.time.total,
-                    minMargin: Math.min(0, data.margin.min) + ' ' + data.margin.avg + ' ' + Math.max(0, data.margin.max),
-                    slipLiq: (slipLiq/100).toFixed(4),
-                    avgCheckMsPerUser: ( parseFloat(data.time.total) / (intervalCount *  (users.size)) ).toFixed(6)
-                }
-            }
-            console.log(JSON.stringify(x))
-            const liqStorage = localStorage.getItem('liquidations');
-            
-            if (liqStorage !== undefined && liqStorage !== null) {
-                data.total = (JSON.parse(liqStorage) as Array<{ pub: string, tx: string, balanceChange: number }>).map((liq : { pub: string, tx: string, balanceChange: number } ) => liq.balanceChange).reduce((a : number, b : number) => a + b, 0).toFixed(2)
-            }
-
-            let workerStorage = localStorage.getItem('worker-'+uuid)
-
-            if (workerStorage !== undefined && workerStorage !== null) {
-                workerStorage = JSON.parse(workerStorage)
-                workerStorage.push(data)
-                localStorage.setItem('worker-'+uuid, JSON.stringify(workerStorage))
-            }
-
-            intervalCount = 0
-            numUsersChecked = new Array<number>();
-            totalTime = new Array<number>();
-            avgMarginRatio = new Array<number>();
-        }, 60 * 1000 * workerLoopTimeInMinutes)
+        resolve(marginRatio.div(new BN(100)).toNumber())
     })
     
 }
-const processMessage = (dataSource: string, pub : string, ipcUserAccount?: IPC_UserAccount, ipcUserPositionArray?: Array<IPC_UserPosition>) => {
-    const user = users.get(pub) || { positions: [] as Array<UserPosition>, account: {} as UserAccount } as User
-    if (ipcUserPositionArray.length > 0) {
-        user.positions = ipcUserPositionArray.map(convertUserPositionFromIPC)
+
+const mapFilteredToLiquidationCheck = () : Array<Promise<number>> => {
+    return filtered().map(([publicKey,]) : Promise<number> => { 
+        return new Promise((innerResolve) => {
+            checkUser(publicKey).then(margin => innerResolve(margin))
+        })
+    })
+}
+
+// based on liquidation distance check users for liquidation
+const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number], averageMarginRatio: number }> => {
+    return new Promise(resolve => {
+        var hrstart = process.hrtime();
+        const filtered = mapFilteredToLiquidationCheck()
+        Promise.all(filtered).then((promises) => {
+            resolve({numOfUsersChecked: filtered.length, time: process.hrtime(hrstart), averageMarginRatio: promises.reduce((a : number, b : number) => a + b, 0) })
+        })
+    })
+}
+
+
+const updateUserLiquidationDistances = () => {
+    Promise.all([...users.keys()].map(publicKey => new Promise(resolve => resolve(usersLiquidationDistance.set(publicKey, calcDistanceToLiq(getMarginRatio(publicKey)))))))
+}
+
+
+// prepare variables for liquidation loop
+let intervalCount = 0
+let numUsersChecked = new Array<number>();
+let totalTime = new Array<number>();
+let avgMarginRatio = new Array<number>();
+
+// liquidation bot, where the magic happens
+const startWorker = () => {
+    _.genesysgoClearingHouse.subscribe().then(() => {
+        // dont need to call this if we're checking every user
+        // update all users liquidation distance every x minutes
+        (async () => {
+            setInterval(() => {
+                updateUserLiquidationDistances();
+            }, 60 * 1000 * updateLiquidationDistanceInMinutes)
+            setInterval(() => {
+                checkUsersForLiquidation().then(({ numOfUsersChecked, time, averageMarginRatio }) => {
+                    intervalCount++
+                    numUsersChecked.push(Number(numOfUsersChecked))
+                    if (averageMarginRatio > 0 && averageMarginRatio < 1000) {
+                        avgMarginRatio.push(Number(averageMarginRatio))  
+                    }
+                    totalTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
+                })
+            }, checkUsersInMS * 10)
+            setInterval(() => {
+                const data = {
+                    total: '',
+                    intervalCount,
+                    workerLoopTimeInMinutes: workerLoopTimeInMinutes,
+                    checked: {
+                        min: Math.min(...numUsersChecked),
+                        avg: (numUsersChecked.reduce((a, b) => a+b, 0)/numUsersChecked.length).toFixed(2),
+                        max: Math.max(...numUsersChecked),
+                        total: parseInt((numUsersChecked.reduce((a, b) => a+b, 0))+""),
+                    },
+                    time: {
+                        min: Math.min(...totalTime).toFixed(2),
+                        avg: (totalTime.reduce((a, b) => a+b, 0)/totalTime.length).toFixed(2),
+                        max: Math.max(...totalTime).toFixed(2),
+                        total: (totalTime.reduce((a, b) => a+b, 0)).toFixed(2),
+                    },
+                    margin: {
+                        min: Math.min(...avgMarginRatio),
+                        avg: ((avgMarginRatio.reduce((a, b) => a+b, 0)/avgMarginRatio.length)).toFixed(2),
+                        max: Math.max(...avgMarginRatio)
+                    }
+                }
+                const x = {
+                    worker: uuid,
+                    data: {
+                        userCount: users.size,
+                        intervalCount: intervalCount,
+                        usersChecked: data.checked.max,
+                        totalTime:  data.time.total,
+                        // minMargin: data.margin.min + ' ' + data.margin.avg + ' ' + data.margin.max,
+                        // slipLiq: (slipLiq/100).toFixed(4),
+                        avgCheckMsPerUser: ( parseFloat(data.time.total) / (intervalCount *  (users.size)) ).toFixed(6)
+                    }
+                }
+                // send data to main process
+                console.log(JSON.stringify(x))
+            
+                const liqStorage = localStorage.getItem('liquidations');
+                
+                if (liqStorage !== undefined && liqStorage !== null) {
+                    data.total = (JSON.parse(liqStorage) as Array<{ pub: string, tx: string, balanceChange: number }>).map((liq : { pub: string, tx: string, balanceChange: number } ) => liq.balanceChange).reduce((a : number, b : number) => a + b, 0).toFixed(2)
+                }
+            
+                let workerStorage = localStorage.getItem('worker-'+uuid)
+            
+                if (workerStorage !== undefined && workerStorage !== null) {
+                    workerStorage = JSON.parse(workerStorage)
+                    workerStorage.push(data)
+                    localStorage.setItem('worker-'+uuid, JSON.stringify(workerStorage))
+                }
+            
+                intervalCount = 0
+                numUsersChecked = new Array<number>();
+                totalTime = new Array<number>();
+                avgMarginRatio = new Array<number>();
+            }, 60 * 1000 * workerLoopTimeInMinutes)
+        })();
+    }).catch(error => {
+        console.error(error);
+    })
+    
+}
+
+
+const processMessage = (data : MessageData) => {
+    const user = users.get(data.pub) ?? { positions: [] as Array<UserPosition>, account: {} as UserAccount } as User
+    if (data.userPositionArray.length > 0) {
+        user.positions = data.userPositionArray.map(convertUserPositionFromIPC);
+        if (data.dataSource === 'userPositionsData') {
+            usersLiquidationDistance.set(data.pub, calcDistanceToLiq(getMarginRatio(data.pub)));
+        }
     }
-    if (ipcUserAccount !== null) {
-        user.account = convertUserAccountFromIPC(ipcUserAccount)
+    if (data.userAccount !== null) {
+        user.account = convertUserAccountFromIPC(data.userAccount)
+        if (data.dataSource === 'userAccountData') {
+            usersLiquidationDistance.set(data.pub, calcDistanceToLiq(getMarginRatio(data.pub)));
+        }
     }
     // console.log(dataSource, JSON.stringify(user))
-    users.set(pub, user);
+    users.set(data.pub, user);
+    if (data.dataSource === 'preExisting') {
+        updateUserLiquidationDistances()
+    }
 }
 
 interface MessageData {
     dataSource: string,
     pub: string,
     userPositionArray?: Array<IPC_UserPosition>
-    userAccount?: IPC_UserAccount
+    userAccount?: IPC_UserAccount,
+    market?: BN
 }
 
 process.on('message', (data : MessageData) => {
-    processMessage(data.dataSource, data.pub, data.userAccount, data.userPositionArray)
+    processMessage(data)
 })
 
 startWorker()

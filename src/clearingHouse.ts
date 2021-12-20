@@ -34,20 +34,39 @@ try {
 }
 const botWallet = new Wallet(keypair);
 
+//setup drift protocol
+const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
+
 
 //setup solana rpc connection
 // the one provided is the best one as it allows for unlimited TPS
-const mainnetConnection = new Connection("https://ssc-dao.genesysgo.net/")
-const provider = new Provider(mainnetConnection, botWallet, Provider.defaultOptions());
+const genesysgoConnection = new Connection("https://ssc-dao.genesysgo.net/");
 
-//setup drift protocol
-const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
-const clearingHouse = ClearingHouse.from(
-    mainnetConnection,
-    provider.wallet,
+const genesysgoProvider = new Provider(genesysgoConnection, botWallet, Provider.defaultOptions());
+
+
+
+const genesysgoClearingHouse = ClearingHouse.from(
+    genesysgoConnection,
+    genesysgoProvider.wallet,
     new PublicKey(
         sdkConfig.CLEARING_HOUSE_PROGRAM_ID
     )
 )
 
-export default { clearingHouse, mainnetConnection }
+const rpcPoolConnection = new Connection("https://free.rpcpool.com");
+
+const rpcPoolProvider = new Provider(rpcPoolConnection, botWallet, Provider.defaultOptions());
+
+
+const rpcPoolClearingHouse = ClearingHouse.from(
+    rpcPoolConnection,
+    rpcPoolProvider.wallet,
+    new PublicKey(
+        sdkConfig.CLEARING_HOUSE_PROGRAM_ID
+    )
+)
+
+
+
+export default { genesysgoClearingHouse, rpcPoolClearingHouse, genesysgoConnection, rpcPoolConnection }

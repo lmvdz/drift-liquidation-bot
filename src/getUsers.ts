@@ -9,7 +9,7 @@ import { atob } from "./util/atob.js"
 
 import { default as _ } from './clearingHouse.js';
 const programUserAccounts = localStorage.getItem('programUserAccounts')
-_.clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
+_.genesysgoClearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
     if (programUserAccounts !== undefined && programUserAccounts !== null) {
         const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as Array<{ publicKey: string, authority: string}>;
         let newlyAddedCount = 0

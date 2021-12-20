@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "start": "node  --loader ts-node/esm ./src/index.ts",
-    "test": "node --no-warnings --loader ts-node/esm ./src/test.ts"
+    "liqHistory": "node --no-warnings --loader ts-node/esm ./src/liqHistoryVisualizer.ts"
   },
   "author": "",
   "engines": {
@@ -18,11 +18,15 @@
   "license": "ISC",
   "dependencies": {
     "@drift-labs/sdk": "^0.1.11",
+    "@pythnetwork/client": "^2.5.1",
     "@solana/web3.js": "^1.31.0",
+    "@types/asciichart": "^1.5.6",
+    "asciichart": "^1.5.25",
     "dotenv": "^10.0.0",
     "fs-extra": "^10.0.0",
     "node-localstorage": "^2.2.1",
     "spinnies": "^0.5.1",
+    "ts-loader": "^9.2.6",
     "ts-node": "^10.4.0"
   },
   "devDependencies": {
