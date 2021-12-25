@@ -26,14 +26,19 @@ import {
 // import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
 
 // CONFIG THE BOT
+
 // how many minutes before users will be fetched from on chain ( get new users )
 const userUpdateTimeInMinutes = 60
+
 // how many minutes is considered one loop for the worker
 const workerLoopTimeInMinutes = 1
+
 // update all margin ratios every x minutes
 const updateAllMarginRatiosInMinutes = 1
+
 // users will be checked every x seconds
 const checkUsersEveryMS = 5
+
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
 // (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
@@ -54,77 +59,22 @@ const workerCount = 80;
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
 
-const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
-const activeUserEventListeners : Map<string, ActiveListeners> = new Map<string, ActiveListeners>();
-
-interface ActiveListeners { 
-    userAccountData: boolean,
-    userPositionsData: boolean
-}
-
 // loop to subscribe users, sometimes there are errors
 // so users who were unable to be subscribed to will be subscribed to in the next loop
 // loop runs until there are no more failed subscriptions or until there have been ten runs of the loop
-let failedSubscriptionLoopsCount = 0
 const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: string}>) : Promise<void> => {
     return new Promise((resolve, reject) => {
         subscribeToUserAccounts(newUsers).then(() => resolve())
     })
 }
 
+// holds which worker uuid has which user pubkey
 const workerAssignment : Map<string, string> = new Map<string, string>();
-
-// split the workload by delegating equal amounts of users to each worker
-// asign the user's events to the correspoding worker
-// const assignUserToWorker = (pub: PublicKey, user: ClearingHouseUser) => {
-//     const indexOfUser = [...users.keys()].indexOf(pub.toBase58())
-//     const workerIndex = indexOfUser % workerCount
-//     const workerAssignedUUID = [...workers.keys()][workerIndex]
-//     const activeListeners = activeUserEventListeners.get(pub.toBase58()) ?? { userPositionsData: false, userAccountData: false } as ActiveListeners
-//     if (!activeListeners.userPositionsData) {
-//         user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
-//             if (splitUsersBetweenWorkers) {
-//                 workers.get(workerAssignedUUID).send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
-//             } else {
-//                 workers.forEach(worker => {
-//                     worker.send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
-//                 })
-//             }
-//         })
-//         activeListeners.userPositionsData = true
-//     }
-//     if (!activeListeners.userAccountData) {
-//         user.accountSubscriber.eventEmitter.on("userAccountData", (payload:UserAccount) => {
-//             if (splitUsersBetweenWorkers) {
-//                 workers.get(workerAssignedUUID).send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
-//             } else {
-//                 workers.forEach(worker => {
-//                     worker.send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
-//                 })
-//             }
-//         })
-//         activeListeners.userAccountData = true
-//     }
-//     activeUserEventListeners.set(pub.toBase58(), activeListeners);
-//     if (splitUsersBetweenWorkers) {
-//         workers.get(workerAssignedUUID).send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
-//     } else {
-//         workers.forEach(worker => {
-//             worker.send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
-//         })
-//     }
-// }
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
 const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string, authority: string }>) : Promise<any> => {
     return new Promise((resolve, reject) => {
-        // let countSubscribed = 0
-        // const failedToSubscribe:Array<{publicKey: string, authority: string}> = []
-        // if (programUserAccounts.length < 1) {
-        //     resolve (failedToSubscribe)
-        //     return;
-        // }
         Promise.all(
             programUserAccounts.filter(programUserAccount => {
                 if (splitUsersBetweenWorkers) {
@@ -136,11 +86,6 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                 
             ).map((programUserAccount: {publicKey: string, authority: string}, index: number) : Promise<void> => {
                 return new Promise((innerResolve) => {
-                    // workers.forEach(worker => {
-                    //     worker.send({ dataSource: 'user', programUserAccount: programUserAccount })
-                    //     innerResolve()
-                    // })
-                    // console.log('mapping user', workerId)
                     if (splitUsersBetweenWorkers) {
                         let worker = [...workers.keys()][index % workerCount];
                         workerAssignment.set(programUserAccount.publicKey, worker);
@@ -160,6 +105,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
     })
 };
 
+// used to print out the tables and chart to console
 const print = async () => {
     if (!_.genesysgoClearingHouse.isSubscribed)
         await _.genesysgoClearingHouse.subscribe(['liquidationHistoryAccount'])
@@ -205,12 +151,16 @@ const print = async () => {
     ), [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
 
 }
-
+// map worker uuid to worker child process
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
+// holds the data used to print information
 const workerData : Map<string, string> = new Map<string, string>();
+// used to make sure that print is only called once
 let printTimeout : NodeJS.Timer;
-let pythListening = false;
 
+
+// calls the getUsers script as a child proccess
+// then sends those new users to the workers
 const getNewUsers = () => {
     const newUsersWorker = exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
         if (stdout.includes('done')) {
@@ -222,7 +172,7 @@ const getNewUsers = () => {
     });
 }
 
-
+// starts each worker and handles the information being sent back
 const startWorkers = (workerCount) : Promise<void> => {
     return new Promise((resolve => {
         let started = 0;
@@ -305,13 +255,11 @@ const startWorkers = (workerCount) : Promise<void> => {
     
 }
 
-// const pythConnection = new PythConnection(_.genesysgoConnection, getPythProgramKeyForCluster('mainnet-beta'))
-
-// // Start listening for price change events.
-// pythConnection.start()
-
-
-// liquidation bot, where the magic happens
+// start the bot
+// subscribe to liquidation history for the console table of liquidation history
+// start the workers
+// subscribe the users
+// start the get new users loop
 const startLiquidationBot = (workerCount) => {
     _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount"]).then(() => {
         startWorkers(workerCount).then(() => {
