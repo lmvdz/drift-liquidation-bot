@@ -193,7 +193,7 @@ const calculatePositionPNL = (
 		return ZERO;
 	}
 
-	let pnlAssetAmount = marketPosition.baseAssetAmount.gt(ZERO) ? baseAssetValue.sub(marketPosition.quoteAssetAmount) : marketPosition.quoteAssetAmount.sub(baseAssetValue);
+	let pnlAssetAmount = (marketPosition.baseAssetAmount.gt(ZERO) ? baseAssetValue.sub(marketPosition.quoteAssetAmount) : marketPosition.quoteAssetAmount.sub(baseAssetValue));
 
 	if (withFunding) {
 		pnlAssetAmount = pnlAssetAmount.add(calculatePositionFundingPNL(
@@ -204,6 +204,7 @@ const calculatePositionPNL = (
 
 	return pnlAssetAmount;
 }
+
 
 const getMarginRatio = (pub: string) => {
     const user = users.get(pub)
