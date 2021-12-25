@@ -14,7 +14,7 @@ Create a `.env.local` file in the root of the project.
 The bot will look for the `BOT_KEY` variable in the environment file.  
 The `BOT_KEY` can either be a Uint8Array (solana-keygen) or base_58 encoded private key (phantom wallet export).  
 
-There are some config variables you can configure.  
+There are some config variables you can configure near the top of `index.ts`.  
 
 - how often to get new users from on chain  
 `userUpdateTimeInMinutes`  
