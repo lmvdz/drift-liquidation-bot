@@ -5,18 +5,14 @@ import fs from 'fs-extra'
 // spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
 import { randomUUID } from 'crypto'
-import { ClearingHouseUser, Markets, UserAccount, UserPositionsAccount } from '@drift-labs/sdk';
-import { PublicKey } from '@solana/web3.js';
 
 import { default as _ } from './clearingHouse.js'
 
 import { LocalStorage } from 'node-localstorage';
 const localStorage = new LocalStorage('./storage');
 
-import { convertUserAccount, convertUserPosition } from './ipcInterface.js';
+import { getTable } from './util/table.js'
 
-import { table, getTable } from './util/table.js'
-import BN from 'bn.js'
 import {
     getLiquidationChart,
     getLiquidatorProfitTables,
@@ -172,6 +168,9 @@ const getNewUsers = () => {
     });
 }
 
+const start = Date.now();
+
+
 // starts each worker and handles the information being sent back
 const startWorkers = (workerCount) : Promise<void> => {
     return new Promise((resolve => {
@@ -233,17 +232,17 @@ const startWorkers = (workerCount) : Promise<void> => {
                     }
                 } else {
                     // console.log(data.toString('utf8'))
-                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker.out')) {
-                        fs.writeFileSync(process.cwd() + '\\src\\logs\\worker.out', '')
+                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
+                        fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
                     }
-                    fs.appendFileSync(process.cwd() + '\\src\\logs\\worker.out', new Date() + ' ' + workerUUID + " " + data)
+                    fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + data)
                 }
             })
             worker.stderr.on('data', (data : Buffer) => {
-                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err.out')) {
-                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err.out', '')
+                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
+                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
                 }
-                return fs.appendFileSync(process.cwd() + '\\src\\logs\\err.out', workerUUID + " " + data)
+                return fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + data)
             })
             worker.stdout.on('close', (error) => {
                 worker.kill()

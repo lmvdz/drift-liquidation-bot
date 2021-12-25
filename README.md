@@ -12,17 +12,36 @@ The `BOT_KEY` can either be a Uint8Array (solana-keygen) or base_58 encoded priv
 
 There are some config variables you can configure.  
 
+- how often to get new users from on chain  
+`userUpdateTimeInMinutes`  
+
+- how long is considered 1 loop for the worker
+`workerLoopTimeInMinutes`
+
 - how often the loop resets and checks for new users to subscribe to  
 `liquidationLoopTimeInMinutes`  
   
 - how often the loop checks all users' liquidation distance  
-`updateLiquidationDistanceInMinutes`  
+`updateAllMarginRatiosInMinutes`  
   
 - how often to check for liquidatable users within minimum liquidation distance  
-`checkUsersInMS`  
+`checkUsersEveryMS`  
   
 - min liquidation distance to consider  
 `minLiquidationDistance`  
+
+- partial liquidation slippage to account for the time it takes to send the transaction (frontrunning)
+- the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
+`partialLiquidationSlippage`
+
+- number of workers, each worker will have an equal amount of users
+`workerCount`
+
+- whether or not to split the users into equal amounts for each worker
+- if this is false, and the worker count is greater than 1 than each worker will have a copy of all users
+`splitUsersBetweenWorkers`
+
+
   
 
 Most of the code is documented.  

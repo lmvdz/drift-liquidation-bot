@@ -50,10 +50,13 @@ const uuid = args[2]
 
 // worker loop time in minutes
 const workerLoopTimeInMinutes = parseFloat(args[3])
+
 // update the liquidation distance of all users every X minutes, must be lower than the liquidationLoopTimeInMinutes otherwise won't be called
 const updateAllMarginRatiosInMinutes = parseFloat(args[4])
+
 // check users for liquidation every X milliseconds
 const checkUsersEveryMS = parseFloat(args[5])
+
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
 // (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
@@ -62,7 +65,7 @@ const checkUsersEveryMS = parseFloat(args[5])
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = parseFloat(args[6])
+const minLiquidationDistance = parseFloat(args[6]); // currently not used, all users are checked each call!
 
 // the slippage of partial liquidation as a percentage
 const partialLiquidationSlippage = parseFloat(args[7])
@@ -72,21 +75,10 @@ interface User {
     positions: Array<UserPosition>,
     eventListeners: Array<EventListener>
 }
-// setup bot state
-// const users : Map<string, User> = new Map<string, User>();
 
 const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
 const preparedLiquidationInstructions : Map<string, TransactionInstruction>= new Map<string, TransactionInstruction>();
 const marginRatios : Map<string, BN> = new Map<string, BN>();
-// const usersLiquidationDistance : Map<string, number> =  new Map<string, number>();
-// dont sort, slows down the bot, filtering should be good enough
-// const usersSortedByLiquidationDistance  = () : Array<string>  => {
-//     const publicKeys = ([...usersLiquidationDistance].map(e => { return e[0]; }) as Array<string>);
-//     publicKeys.sort((a, b) => { 
-//         return usersLiquidationDistance.get(a)! - usersLiquidationDistance.get(b)!
-//     })
-//     return publicKeys
-// }
 
 const getLiqTransactionProfit = (tx:string) : Promise<number> => {
     return new Promise((resolve, reject) => {
@@ -237,14 +229,6 @@ const getMarginRatio = (pub: string) => {
 
 
 
-// get all the users from the program and the storage
-// add the new users to the storage
-// maybe one day only request users which are not in storage
-
-// const filtered = () => [...marginRatios].filter(([, ratio]) => { 
-//     return ratio.lte(slipLiq)
-// });
-
 const prioSet : Map<string, NodeJS.Timer> = new Map<string, NodeJS.Timer>();
 
 const check = (pub : string) => {
@@ -257,7 +241,6 @@ const check = (pub : string) => {
 const checkUser = (pub : string) : Promise<{pub: string, marginRatio: BN, closeToLiquidation: boolean}> => {
     return new Promise((resolve) => {
         const marginRatio = getMarginRatio(pub)
-        // console.log(marginRatio.toNumber())
         const closeToLiquidation = marginRatio.lte(slipLiq)
         if (closeToLiquidation) {
             console.log(pub + ' close to liq', marginRatio.toNumber()/100);
@@ -333,8 +316,6 @@ let checkTime = new Array<number>();
 // liquidation bot, where the magic happens
 const startWorker = () => {
     _.genesysgoClearingHouse.subscribe().then(() => {
-        // dont need to call this if we're checking every user
-        // update all users liquidation distance every x minutes
         (async () => {
             setInterval(() => {
                 updateAllMarginRatios()
@@ -342,6 +323,7 @@ const startWorker = () => {
             setInterval(() => {
                 checkUsersForLiquidation().then(({ numOfUsersChecked, time }) => {
                     intervalCount++
+                    // console.log(intervalCount, numOfUsersChecked)
                     numUsersChecked.push(Number(numOfUsersChecked))
                     checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
                 })
