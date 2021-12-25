@@ -4,7 +4,11 @@
   
 By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript.  
 
-Currently the bot is hardcoded to run 10 workers at a time.  
+Currently the bot is hardcoded to run 80 workers at a time.  
+Uses a lot of CPU at the start!  
+CPU usage falls off after all the users are loaded/subscribed  
+More workers = More RAM  
+
   
 Create a `.env.local` file in the root of the project.  
 The bot will look for the `BOT_KEY` variable in the environment file.  
@@ -29,18 +33,24 @@ There are some config variables you can configure.
   
 - min liquidation distance to consider  
 `minLiquidationDistance`  
+  
+  
+- partial liquidation slippage to account for the time it takes to send the transaction (frontrunning)  
+- the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)  
+`partialLiquidationSlippage`  
+  
+- number of workers, each worker will have an equal amount of users  
+`workerCount`  
 
-- partial liquidation slippage to account for the time it takes to send the transaction (frontrunning)
-- the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
-`partialLiquidationSlippage`
+- whether or not to split the users into equal amounts for each worker  
+- if this is false, and the worker count is greater than 1 than each worker will have a copy of all users  
+`splitUsersBetweenWorkers`  
 
-- number of workers, each worker will have an equal amount of users
-`workerCount`
 
-- whether or not to split the users into equal amounts for each worker
-- if this is false, and the worker count is greater than 1 than each worker will have a copy of all users
-`splitUsersBetweenWorkers`
-
+```
+npm install
+npm run start
+```
 
   
 
