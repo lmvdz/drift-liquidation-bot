@@ -54,19 +54,6 @@ const genesysgoClearingHouse = ClearingHouse.from(
     )
 )
 
-const rpcPoolConnection = new Connection("https://free.rpcpool.com");
-
-const rpcPoolProvider = new Provider(rpcPoolConnection, botWallet, Provider.defaultOptions());
 
 
-const rpcPoolClearingHouse = ClearingHouse.from(
-    rpcPoolConnection,
-    rpcPoolProvider.wallet,
-    new PublicKey(
-        sdkConfig.CLEARING_HOUSE_PROGRAM_ID
-    )
-)
-
-
-
-export default { genesysgoClearingHouse, rpcPoolClearingHouse, genesysgoConnection, rpcPoolConnection }
+export default { genesysgoClearingHouse, genesysgoConnection }

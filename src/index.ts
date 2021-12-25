@@ -1,11 +1,8 @@
 import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
-import Spinnies from 'spinnies';
 import fs from 'fs-extra'
-fs.emptyDir(process.cwd() + '\\src\\logs\\err\\')
-fs.emptyDir(process.cwd() + '\\src\\logs\\worker\\')
-const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
-spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
+// const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
+// spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
 import { randomUUID } from 'crypto'
 import { ClearingHouseUser, Markets, UserAccount, UserPositionsAccount } from '@drift-labs/sdk';
@@ -19,22 +16,24 @@ const localStorage = new LocalStorage('./storage');
 import { convertUserAccount, convertUserPosition } from './ipcInterface.js';
 
 import { table, getTable } from './util/table.js'
+import BN from 'bn.js'
 import {
     getLiquidationChart,
     getLiquidatorProfitTables,
     updateLiquidatorMap, 
     mapHistoryAccountToLiquidationsArray
 } from './liqHistoryVisualizer.js'
-import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
+// import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
 
-// CONFIG THE LOOP
+// CONFIG THE BOT
+// how many minutes before users will be fetched from on chain ( get new users )
 const userUpdateTimeInMinutes = 60
-// how many minutes will one loop of the workes
+// how many minutes is considered one loop for the worker
 const workerLoopTimeInMinutes = 1
-// update the liquidation distance of all users every X minutes
-const updateLiquidationDistanceInMinutes = 2
-// check users for liquidation every X milliseconds
-const checkUsersInMS = 5
+// update all margin ratios every x minutes
+const updateAllMarginRatiosInMinutes = 1
+// users will be checked every x seconds
+const checkUsersEveryMS = 5
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
 // (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
@@ -43,14 +42,16 @@ const checkUsersInMS = 5
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = 5
+const minLiquidationDistance = 2
 
-// the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.0005 = (625.3125)
+// the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 12
+const partialLiquidationSlippage = 0.8
 
-const workerCount = 30
+// how many workers to check for users will there be
+const workerCount = 80;
 
+// split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
 
 const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
@@ -67,122 +68,94 @@ interface ActiveListeners {
 let failedSubscriptionLoopsCount = 0
 const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: string}>) : Promise<void> => {
     return new Promise((resolve, reject) => {
-        subscribeToUserAccounts(newUsers).then((failedToSubscribe) => {
-            if ((failedToSubscribe as Array<{ publicKey: string, authority: string}>).length > 0 && failedSubscriptionLoopsCount < 10) {
-                failedSubscriptionLoopsCount++
-                resolve(loopSubscribeUser(failedToSubscribe as Array<{ publicKey: string, authority: string}>))
-            } else {
-                resolve()
-            }
-        })
+        subscribeToUserAccounts(newUsers).then(() => resolve())
     })
 }
 
+const workerAssignment : Map<string, string> = new Map<string, string>();
+
 // split the workload by delegating equal amounts of users to each worker
 // asign the user's events to the correspoding worker
-const assignUserToWorker = (pub: PublicKey, user: ClearingHouseUser) => {
-    const indexOfUser = [...users.keys()].indexOf(pub.toBase58())
-    const workerIndex = indexOfUser % workerCount
-    const workerAssignedUUID = [...workers.keys()][workerIndex]
-    const activeListeners = activeUserEventListeners.get(pub.toBase58()) ?? { userPositionsData: false, userAccountData: false } as ActiveListeners
-    if (!activeListeners.userPositionsData) {
-        user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
-            if (splitUsersBetweenWorkers) {
-                workers.get(workerAssignedUUID).send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
-            } else {
-                workers.forEach(worker => {
-                    worker.send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
-                })
-            }
-            
-        })
-        activeListeners.userPositionsData = true
-    }
-    if (!activeListeners.userAccountData) {
-        user.accountSubscriber.eventEmitter.on("userAccountData", (payload:UserAccount) => {
-            if (splitUsersBetweenWorkers) {
-                workers.get(workerAssignedUUID).send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
-            } else {
-                workers.forEach(worker => {
-                    worker.send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
-                })
-            }
-        })
-        activeListeners.userAccountData = true
-    }
-    activeUserEventListeners.set(pub.toBase58(), activeListeners);
-    if (splitUsersBetweenWorkers) {
-        workers.get(workerAssignedUUID).send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
-    } else {
-        workers.forEach(worker => {
-            worker.send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
-        })
-    }
-}
+// const assignUserToWorker = (pub: PublicKey, user: ClearingHouseUser) => {
+//     const indexOfUser = [...users.keys()].indexOf(pub.toBase58())
+//     const workerIndex = indexOfUser % workerCount
+//     const workerAssignedUUID = [...workers.keys()][workerIndex]
+//     const activeListeners = activeUserEventListeners.get(pub.toBase58()) ?? { userPositionsData: false, userAccountData: false } as ActiveListeners
+//     if (!activeListeners.userPositionsData) {
+//         user.accountSubscriber.eventEmitter.on("userPositionsData", (payload:UserPositionsAccount) => {
+//             if (splitUsersBetweenWorkers) {
+//                 workers.get(workerAssignedUUID).send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
+//             } else {
+//                 workers.forEach(worker => {
+//                     worker.send({ dataSource: 'userPositionsData', pub: pub.toBase58(), userAccount: null, userPositionArray:  payload.positions.map(convertUserPosition)})
+//                 })
+//             }
+//         })
+//         activeListeners.userPositionsData = true
+//     }
+//     if (!activeListeners.userAccountData) {
+//         user.accountSubscriber.eventEmitter.on("userAccountData", (payload:UserAccount) => {
+//             if (splitUsersBetweenWorkers) {
+//                 workers.get(workerAssignedUUID).send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
+//             } else {
+//                 workers.forEach(worker => {
+//                     worker.send({ dataSource: 'userAccountData', pub: pub.toBase58(), userAccount: convertUserAccount(payload), userPositionArray: []})
+//                 })
+//             }
+//         })
+//         activeListeners.userAccountData = true
+//     }
+//     activeUserEventListeners.set(pub.toBase58(), activeListeners);
+//     if (splitUsersBetweenWorkers) {
+//         workers.get(workerAssignedUUID).send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
+//     } else {
+//         workers.forEach(worker => {
+//             worker.send({ dataSource: 'preExisting', pub: pub.toBase58(), userAccount: convertUserAccount(user.getUserAccount()), userPositionArray: user.getUserPositionsAccount().positions.map(convertUserPosition)})
+//         })
+//     }
+// }
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
 const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string, authority: string }>) : Promise<any> => {
     return new Promise((resolve, reject) => {
-        let countSubscribed = 0
-        const failedToSubscribe:Array<{publicKey: string, authority: string}> = []
-        if (programUserAccounts.length < 1) {
-            resolve (failedToSubscribe)
-            return;
-        }
-        programUserAccounts.forEach((programUserAccount: {publicKey: string, authority: string}, index: number) => {
-
-            const authority = new PublicKey(programUserAccount.authority)
-            const user = ClearingHouseUser.from(
-                _.genesysgoClearingHouse,
-                authority
-            );
-            user.getUserAccountPublicKey().then(pub => {
-                if (users.has(pub.toBase58()) && users.get(pub.toBase58())?.isSubscribed) {
-                    countSubscribed++
-                    assignUserToWorker(pub, users.get(pub.toBase58()))
-                    if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                        setTimeout(() => {
-                            resolve(failedToSubscribe)
-                        }, 1000)
-                    }
-                    return;
+        // let countSubscribed = 0
+        // const failedToSubscribe:Array<{publicKey: string, authority: string}> = []
+        // if (programUserAccounts.length < 1) {
+        //     resolve (failedToSubscribe)
+        //     return;
+        // }
+        Promise.all(
+            programUserAccounts.filter(programUserAccount => {
+                if (splitUsersBetweenWorkers) {
+                    return (workerAssignment.get(programUserAccount.publicKey) === undefined || workerAssignment.get(programUserAccount.publicKey) === null)
                 } else {
-                    user.subscribe().then(subscribed => {
-                        users.set(pub.toBase58(), user);
-                        assignUserToWorker(pub, users.get(pub.toBase58()))
-                        countSubscribed++
-                        if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            setTimeout(() => {
-                                resolve(failedToSubscribe)
-                            }, 1000)
-                        }
-                    }).catch(error => {
-                        console.error(error)
-                        if (!failedToSubscribe.includes(programUserAccount)) {
-                            failedToSubscribe.push(programUserAccount)
-                        }
-                        if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                            setTimeout(() => {
-                                resolve(failedToSubscribe)
-                            }, 1000)
-                        }
-                    })
+                    return true;
                 }
+            }
                 
-            }).catch(error => {
-                console.error(error)
-                if (!failedToSubscribe.includes(programUserAccount)) {
-                    failedToSubscribe.push(programUserAccount)
-                }
-                if (countSubscribed + failedToSubscribe.length >= programUserAccounts.length) {
-                    setTimeout(() => {
-                        resolve(failedToSubscribe)
-                    }, 1000)
-                }
-                
+            ).map((programUserAccount: {publicKey: string, authority: string}, index: number) : Promise<void> => {
+                return new Promise((innerResolve) => {
+                    // workers.forEach(worker => {
+                    //     worker.send({ dataSource: 'user', programUserAccount: programUserAccount })
+                    //     innerResolve()
+                    // })
+                    // console.log('mapping user', workerId)
+                    if (splitUsersBetweenWorkers) {
+                        let worker = [...workers.keys()][index % workerCount];
+                        workerAssignment.set(programUserAccount.publicKey, worker);
+                        workers.get(worker).send({ dataSource: 'user', programUserAccount })
+                        innerResolve()
+                    } else {
+                        workers.forEach(worker => {
+                            worker.send({ dataSource: 'user', programUserAccount: programUserAccount })
+                        })
+                        innerResolve()
+                    }
+                })
             })
-            
+        ).then(() => {
+            resolve([])
         })
     })
 };
@@ -199,32 +172,33 @@ const print = async () => {
         ([[...workerData].map(([wrkr, mapData]) => {
             let dataFromMap = JSON.parse(mapData)
             let r =  {
-                "Worker": wrkr.split('-')[4],
-                "Users Within Range": parseFloat(dataFromMap.usersChecked),
+                "Users Within Range": parseFloat(dataFromMap.margin.length),
                 "User Count": parseFloat(dataFromMap.userCount),
                 "Times Checked": parseFloat(dataFromMap.intervalCount),
-                "Total MS": parseFloat(dataFromMap.totalTime),
-                "User Check MS": parseFloat(dataFromMap.avgCheckMsPerUser),
+                "Total MS": parseFloat(dataFromMap.time.total),
+                "User Check MS": dataFromMap.time.total / (dataFromMap.intervalCount *  (dataFromMap.userCount)),
+                "Min Margin %": dataFromMap.margin.min
             }
             return r
         }).reduce((a, b) => {
             return {
-                "Worker": workerCount.toString(),
                 "Users Within Range": a["Users Within Range"] + b["Users Within Range"],
                 "User Count": a["User Count"]+ b["User Count"],
                 "Times Checked": a["Times Checked"] + b["Times Checked"],
                 "Total MS": a["Total MS"] + b["Total MS"],
-                "User Check MS": a["User Check MS"] + b["User Check MS"]
+                "User Check MS": a["User Check MS"] + b["User Check MS"],
+                "Min Margin %": a["Min Margin %"] > (b["Min Margin %"]) ? (b["Min Margin %"]) : a["Min Margin %"]
             }
         })].map(x => {
             return {
-                "Worker": parseFloat(x["Worker"]),
+                "Worker": workerCount,
                 "Users Within Range": x["Users Within Range"],
                 "User Count": x["User Count"],
-                "Total Times Checked": parseInt(x["Times Checked"] + ""),
-                "Average Worker MS": (x["Total MS"] / parseFloat(x["Worker"])).toFixed(2),
-                "Average Worker Check MS": ((x["Total MS"] / parseFloat(x["Worker"])) / (x["Times Checked"] / parseFloat(x["Worker"]))).toFixed(2),
-                "Average User Check MS": ( x["User Check MS"] / parseFloat(x["Worker"] )).toFixed(6)
+                "Average Times Checked": parseInt(x["Times Checked"] + "") / workerCount,
+                "Average Worker MS": (x["Total MS"] / workerCount).toFixed(2),
+                "Average Worker Check MS": ((x["Total MS"] / workerCount) / (x["Times Checked"] / workerCount)).toFixed(2),
+                "Average User Check MS": ( x["User Check MS"] / workerCount).toFixed(6),
+                "Min Margin %": ( x["Min Margin %"] ).toFixed(6)
             }
         }))
 
@@ -234,106 +208,120 @@ const print = async () => {
 
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
 const workerData : Map<string, string> = new Map<string, string>();
-let listeningToPyth = false;
 let printTimeout : NodeJS.Timer;
+let pythListening = false;
 
-const getNewUsers = (workerCount) => {
-    console.clear()
-    spinnies.update('main', { status: 'spinning', text: 'updating user list\n' + [userUpdateTimeInMinutes,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage].join(' - ') + '\n' })
-    const getUsers = exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
+const getNewUsers = () => {
+    const newUsersWorker = exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
         if (stdout.includes('done')) {
-            // console.log('got users');
-            // spinnies.update('main', { status: 'succeed', text: 'updated user list from chain' })
             (async () => {
                 loopSubscribeUser(JSON.parse(atob(localStorage.getItem('programUserAccounts')!)) as Array<{ publicKey: string, authority: string}>)
-                getUsers.kill()
+                newUsersWorker.kill()
             })();
         }
     });
-    spinnies.add('workers', { text: ""})
-    for(let x = workers.size; x < workerCount; x++) {
-        let workerUUID = randomUUID()
-        if (workerCount <= 10) {
-            // spinnies.add(workerUUID.split('-').join('')+'', { text: 'worker - ' + workerUUID });
-        }
-        workers.set(workerUUID, 
-            fork("./src/worker.js",
-                [workerUUID,workerLoopTimeInMinutes,updateLiquidationDistanceInMinutes,checkUsersInMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
-                {
-                    stdio: [ 'pipe', 'pipe', (() => {
-                        if (fs.existsSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out')) {
-                            fs.writeFileSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out', '')
-                        }
-                        return fs.openSync(process.cwd() + '\\src\\logs\\err\\'+workerUUID.split('-').join('')+'.out', 'w')
-                    })(), 'ipc' ]
-                }
-            )
-        )
-        const worker = workers.get(workerUUID)
-        worker.stdout.on('data', (data : Buffer) => {
-            // console.log(data.toString('utf8'))
-            if (fs.existsSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out')) {
-                fs.writeFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', '')
-            }
-            fs.appendFileSync(process.cwd() + '\\src\\logs\\worker\\'+workerUUID.split('-').join('')+'.out', data)
-            if (data.toString('utf8').charCodeAt(0) === 123) {
-                try {
-                    
-                    let d = JSON.parse(data.toString('utf8'))
-                    if (d.worker !== undefined && d.data !== undefined) {
-                        workerData.set(d.worker, JSON.stringify(d.data));
-                        if (printTimeout) {
-                            clearTimeout(printTimeout);
-                        }
-                        printTimeout = setTimeout(() => {
-                            print();
-                        }, 5000)
-                    }
-                } catch (error) {
-                    // console.error(error)
-                }
-            }
-            
-            if (data.includes('Liquidated')) {
-                spinnies.add('liquidation'+randomUUID().split('-')[0], { status: 'succeed', text: data })
-            }
-        })
-        worker.stdout.on('close', (error) => {
-            worker.kill()
-        })
-    }
-    if (!listeningToPyth) {
-        listeningToPyth = true;
-        // pythConnection.onPriceChange((product, price) => {
-        //     // sample output:
-        //     // SRM/USD: $8.68725 ±$0.0131
-        //     const market = Markets.filter(market => {
-        //         return product.base === market.symbol.split('-')[0]
-        //     })[0]
-        //     if (market !== undefined) {
-        //         workers.forEach(worker => {
-        //             worker.send({ dataSource: 'priceChange', market: market.marketIndex})
-        //         })
-        //     }
-        // })
-    }
-    
-
-    setTimeout(() => {
-        getNewUsers(workerCount);
-    }, 60 * 1000 * userUpdateTimeInMinutes)
 }
 
-const pythConnection = new PythConnection(_.genesysgoConnection, getPythProgramKeyForCluster('mainnet-beta'))
 
-// Start listening for price change events.
-pythConnection.start()
+const startWorkers = (workerCount) : Promise<void> => {
+    return new Promise((resolve => {
+        let started = 0;
+        for(let x = workers.size; x < workerCount; x++) {
+            let workerUUID = randomUUID()
+            if (workerCount <= 10) {
+                // spinnies.add(workerUUID.split('-').join('')+'', { text: 'worker - ' + workerUUID });
+            }
+            workers.set(workerUUID, 
+                fork("./src/worker.js",
+                    [workerCount,x,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
+                    {
+                        stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ]
+                    }
+                )
+            )
+            const worker = workers.get(workerUUID)
+            worker.stdout.on('data', (data : Buffer) => {
+                if (started < workerCount) {
+                    if (data.toString().includes('started')) {
+                        started++
+                        if (started === workerCount) {
+                            resolve();
+                        }
+                        return;
+                    }
+                }
+                if (data.toString('utf8').charCodeAt(0) === 123) {
+                    try {
+                        let d = JSON.parse(data.toString('utf8'));
+                        if (d.worker !== undefined && d.data !== undefined) {
+                            d.data.checked = {
+                                min: Math.min(...d.data.checked),
+                                avg: (d.data.checked.reduce((a, b) => a+b, 0)/d.data.checked.length).toFixed(2),
+                                max: Math.max(...d.data.checked),
+                                total: parseInt((d.data.checked.reduce((a, b) => a+b, 0))+""),
+                            }
+                            d.data.margin = {
+                                min: Math.min(...d.data.margin, 0),
+                                avg: d.data.margin.length === 0 ? 0 : ([...d.data.margin].reduce((a, b) => a+b, 0)/(d.data.margin.length)).toFixed(2),
+                                max: Math.max(...d.data.margin, 0),
+                                total: ([...d.data.margin].reduce((a, b) => a+b, 0))
+                            }
+                            d.data.time = {
+                                min: Math.min(...d.data.time).toFixed(2),
+                                avg: (d.data.time.reduce((a, b) => a+b, 0)/d.data.time.length).toFixed(2),
+                                max: Math.max(...d.data.time).toFixed(2),
+                                total: (d.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
+                            }
+                            workerData.set(d.worker, JSON.stringify(d.data));
+                            if (printTimeout) {
+                                clearTimeout(printTimeout);
+                            }
+                            printTimeout = setTimeout(() => print(), 5000)
+                        }
+                    } catch (error) {
+                        console.error(error)
+                    }
+                } else {
+                    // console.log(data.toString('utf8'))
+                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker.out')) {
+                        fs.writeFileSync(process.cwd() + '\\src\\logs\\worker.out', '')
+                    }
+                    fs.appendFileSync(process.cwd() + '\\src\\logs\\worker.out', new Date() + ' ' + workerUUID + " " + data)
+                }
+            })
+            worker.stderr.on('data', (data : Buffer) => {
+                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err.out')) {
+                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err.out', '')
+                }
+                return fs.appendFileSync(process.cwd() + '\\src\\logs\\err.out', workerUUID + " " + data)
+            })
+            worker.stdout.on('close', (error) => {
+                worker.kill()
+            })
+        }
+    }));
+    
+
+    
+}
+
+// const pythConnection = new PythConnection(_.genesysgoConnection, getPythProgramKeyForCluster('mainnet-beta'))
+
+// // Start listening for price change events.
+// pythConnection.start()
 
 
 // liquidation bot, where the magic happens
 const startLiquidationBot = (workerCount) => {
     _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount"]).then(() => {
-        getNewUsers(workerCount);
+        startWorkers(workerCount).then(() => {
+            console.clear();
+            let userDataFromStorage = JSON.parse(atob(localStorage.getItem('programUserAccounts')!));
+            loopSubscribeUser(userDataFromStorage as Array<{ publicKey: string, authority: string}>)
+            setTimeout(() => {
+                getNewUsers();
+            }, 60 * 1000 * userUpdateTimeInMinutes)
+        })
     })
 
 }

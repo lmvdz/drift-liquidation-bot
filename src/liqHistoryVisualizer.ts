@@ -153,7 +153,7 @@ export const getLiquidatorProfitTables = (liquidatorMap : Map<string, Array<Liqu
         }))), 
         ([...liquidatorMap.values()].flat().sort((a, b) => {
             return b.ts.getTime() - a.ts.getTime()
-        }).slice(0, 10).map(newest => {
+        }).slice(0, 20).map(newest => {
             return {
                 "Liquidator": newest.liquidator,
                 "Profit": "+" +newest.feeToLiquidator + " USDC",

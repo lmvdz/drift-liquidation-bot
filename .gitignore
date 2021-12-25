@@ -4,3 +4,4 @@ yarn.lock
 package-lock.json
 logs/**
 *.out
+storage/liquidations
