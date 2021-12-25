@@ -60,3 +60,6 @@ The bot is optimized to only check to liquidate users who's margin_ratio is extr
 
 If you have questions, find me in the Drift Protocol discord: https://discord.gg/uDNCH9QC `@lmvdzande#0001`
 
+![image](https://user-images.githubusercontent.com/2179775/147393973-71ee8d39-6935-4414-94c4-a5d20f135698.png)
+
+
