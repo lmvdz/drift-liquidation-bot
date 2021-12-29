@@ -19,6 +19,7 @@ import {
     ZERO,
     
 } from '@drift-labs/sdk';
+import fs from 'fs-extra';
 
 
 
@@ -69,6 +70,7 @@ const minLiquidationDistance = parseFloat(args[6]); // currently not used, all u
 
 // the slippage of partial liquidation as a percentage
 const partialLiquidationSlippage = parseFloat(args[7])
+
 
 interface User {
     account: UserAccount,
@@ -155,13 +157,13 @@ const liq = (pub: string, marginRatio: BN) : Promise<void> => {
                     liquidationStorage.push({ pub: pub, tx, balanceChange })
                 }
                 localStorage.setItem('liquidations', btoa(JSON.stringify(liquidationStorage)))
-                console.error(`${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC`)
+                process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC` } ))
             })
             resolve()
         }).catch(error => {
 
             if (error.message.includes('custom program error: 0x130')) {
-                console.error(`${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}`)
+                process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}` } ))
             }
             resolve()
         });
@@ -239,7 +241,7 @@ const check = (pub : string) => {
     const marginRatio = getMarginRatio(pub)
     if (marginRatio.lte(slipLiq)) {
         liq(pub, marginRatio)
-        console.log('liq attempt ' + pub + ' ' + marginRatio.toNumber());
+        process.send( JSON.stringify({ type: 'out', data: 'liq attempt ' + pub + ' ' + marginRatio.toNumber()/100 }));
     }
     marginRatios.set(pub, marginRatio)
 }
@@ -249,7 +251,7 @@ const checkUser = (pub : string) : Promise<{pub: string, marginRatio: BN, closeT
         const marginRatio = getMarginRatio(pub)
         const closeToLiquidation = marginRatio.lte(slipLiq)
         if (closeToLiquidation) {
-            console.log(pub + ' close to liq', marginRatio.toNumber()/100);
+            process.send( JSON.stringify({ type: 'out', data: pub + ' close to liq ' + marginRatio.toNumber()/100 }));
             if (!prioSet.has(pub)) {
                 prioSet.set(pub, setInterval(() => {
                     check(pub)
@@ -347,7 +349,8 @@ const startWorker = () => {
                         unrealizedPnLMap: JSON.stringify([...unrealizedPnLMap])
                     }
                 }
-                console.log(JSON.stringify(x))
+                // console.log(JSON.stringify(x))
+                process.send( JSON.stringify({ type: 'data', data: x }));
         
                 intervalCount = 0
                 numUsersChecked = new Array<number>();
@@ -356,7 +359,7 @@ const startWorker = () => {
             }, 60 * 1000 * workerLoopTimeInMinutes)
         })();
     }).catch(error => {
-        console.error(error);
+        process.send( JSON.stringify({ type: 'error', data: error }) );
     })
 }
 
@@ -419,4 +422,4 @@ process.on('message', (data : MessageData) => {
 
 startWorker()
 
-console.log('started');
+process.send( JSON.stringify({type: 'started' }));

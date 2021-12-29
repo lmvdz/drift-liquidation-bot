@@ -150,7 +150,7 @@ const print = async () => {
         ([[...workerData].map(([wrkr, mapData]) => {
             let dataFromMap = JSON.parse(mapData)
             let r =  {
-                "Users Within Range": dataFromMap.margin.length,
+                "Users Within Range": parseFloat(dataFromMap.margin.length),
                 "User Count": parseFloat(dataFromMap.userCount),
                 "Times Checked": parseFloat(dataFromMap.intervalCount),
                 "Total MS": parseFloat(dataFromMap.time.total),
@@ -224,67 +224,62 @@ const startWorkers = (workerCount) : Promise<void> => {
                 )
             )
             const worker = workers.get(workerUUID)
-            worker.stdout.on('data', (data : Buffer) => {
-                if (started < workerCount) {
-                    if (data.toString().includes('started')) {
-                        started++
-                        if (started === workerCount) {
-                            resolve();
+            worker.on('message', (data : string) => {
+                let d = JSON.parse(data);
+                switch(d.type) {
+                    case 'started':
+                        if (started < workerCount) {
+                            started++
+                            console.log(started);
+                            if (started === workerCount) {
+                                resolve();
+                            }
                         }
-                        return;
-                    }
-                }
-                if (data.toString('utf8').charCodeAt(0) === 123) {
-                    try {
-                        let d = JSON.parse(data.toString('utf8'));
-                        if (d.worker !== undefined && d.data !== undefined) {
-                            JSON.parse(d.data.unrealizedPnLMap).forEach(([pub, val]) => {
+                        break;
+                    case 'data':
+                        if (d.data.worker !== undefined && d.data.data !== undefined) {
+                            JSON.parse(d.data.data.unrealizedPnLMap).forEach(([pub, val]) => {
                                 unrealizedPNLMap.set(pub, val);
                             })
-                            d.data.checked = {
-                                min: Math.min(...d.data.checked),
-                                avg: (d.data.checked.reduce((a, b) => a+b, 0)/d.data.checked.length).toFixed(2),
-                                max: Math.max(...d.data.checked),
-                                total: parseInt((d.data.checked.reduce((a, b) => a+b, 0))+""),
+                            d.data.data.checked = {
+                                min: Math.min(...d.data.data.checked),
+                                avg: (d.data.data.checked.reduce((a, b) => a+b, 0)/d.data.data.checked.length).toFixed(2),
+                                max: Math.max(...d.data.data.checked),
+                                total: parseInt((d.data.data.checked.reduce((a, b) => a+b, 0))+""),
                             }
-                            d.data.margin = {
-                                min: Math.min(...d.data.margin, 0),
-                                avg: d.data.margin.length === 0 ? 0 : ([...d.data.margin].reduce((a, b) => a+b, 0)/(d.data.margin.length)).toFixed(2),
-                                max: Math.max(...d.data.margin, 0),
-                                total: ([...d.data.margin].reduce((a, b) => a+b, 0)),
-                                length: d.data.margin.length
+                            d.data.data.margin = {
+                                min: Math.min(...d.data.data.margin, 0),
+                                avg: d.data.data.margin.length === 0 ? 0 : ([...d.data.data.margin].reduce((a, b) => a+b, 0)/(d.data.data.margin.length)).toFixed(2),
+                                max: Math.max(...d.data.data.margin, 0),
+                                total: ([...d.data.data.margin].reduce((a, b) => a+b, 0))
                             }
-                            d.data.time = {
-                                min: Math.min(...d.data.time).toFixed(2),
-                                avg: (d.data.time.reduce((a, b) => a+b, 0)/d.data.time.length).toFixed(2),
-                                max: Math.max(...d.data.time).toFixed(2),
-                                total: (d.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
+                            d.data.data.time = {
+                                min: Math.min(...d.data.data.time).toFixed(2),
+                                avg: (d.data.data.time.reduce((a, b) => a+b, 0)/d.data.data.time.length).toFixed(2),
+                                max: Math.max(...d.data.data.time).toFixed(2),
+                                total: (d.data.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
                             }
-                            workerData.set(d.worker, JSON.stringify(d.data));
+                            workerData.set(d.worker, JSON.stringify(d.data.data));
                             if (printTimeout) {
                                 clearTimeout(printTimeout);
                             }
                             printTimeout = setTimeout(() => print(), 5000)
                         }
-                    } catch (error) {
-                        console.error(error)
-                    }
-                } else {
-                    // console.log(data.toString('utf8'))
-                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
-                        fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
-                    }
-                    fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + data)
+                        break;
+                    case 'out':
+                        if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
+                            fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
+                        }
+                        fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data)
+                        break;
+                    case 'error':
+                        if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
+                            fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
+                        }
+                        fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data)
+                        break;
                 }
-            })
-            worker.stderr.on('data', (data : Buffer) => {
-                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
-                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
-                }
-                return fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + data)
-            })
-            worker.stdout.on('close', (error) => {
-                worker.kill()
+
             })
         }
     }));
