@@ -19,6 +19,9 @@ import {
     updateLiquidatorMap, 
     mapHistoryAccountToLiquidationsArray
 } from './liqHistoryVisualizer.js'
+import { AMM_RESERVE_PRECISION, BN, calculateBaseAssetValue, ClearingHouseUser, convertBaseAssetAmountToNumber, convertToNumber, Markets, PRICE_TO_QUOTE_PRECISION, QUOTE_PRECISION, UserAccount, UserPosition, UserPositionsAccount, ZERO } from '@drift-labs/sdk';
+import { PublicKey } from '@solana/web3.js';
+// import { BN, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
 // import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
 
 // CONFIG THE BOT
@@ -101,6 +104,9 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
     })
 };
 
+const unrealizedPNLMap : Map<string, string> = new Map<string, string>();
+
+
 // used to print out the tables and chart to console
 const print = async () => {
     if (!_.genesysgoClearingHouse.isSubscribed)
@@ -110,11 +116,41 @@ const print = async () => {
     const liquidationChart = getLiquidationChart(liquidatorMap, [userAccount.toBase58()])
     const liquidationTables = getLiquidatorProfitTables(liquidatorMap, [userAccount.toBase58()])
     console.clear();
+    // Promise.all([...unrealizedPNLMap].sort((a : [string, string], b: [string, string]) => {
+    //     return parseInt(b[1]) - parseInt(a[1]);
+    // }).slice(0, 10).map(([pub, val]) => {
+    //     return new Promise((resolve) => {
+    //         _.genesysgoClearingHouse.program.account.user.fetch(new PublicKey(pub)).then((userAccount) => {
+    //             _.genesysgoClearingHouse.program.account.userPositions.fetch((userAccount as UserAccount).positions).then(userPositionsAccount => {
+    //                resolve(
+    //                    { 
+    //                        pub,
+    //                        positions: (userPositionsAccount as UserPositionsAccount).positions.filter((p : UserPosition) => p.baseAssetAmount.gt(ZERO) || p.baseAssetAmount.lt(ZERO)).map(p => {
+    //                         let z = {
+    //                             marketIndex: p.marketIndex.toNumber(),
+    //                             baseAssetAmount: convertBaseAssetAmountToNumber(p.baseAssetAmount),
+    //                             qouteAssetAmount: convertToNumber(p.quoteAssetAmount, QUOTE_PRECISION),
+    //                             baseAssetValue: convertToNumber(calculateBaseAssetValue(_.genesysgoClearingHouse.getMarket(p.marketIndex.toNumber()), p), QUOTE_PRECISION),
+    //                             entryPrice: 0,
+    //                             profit: 0
+    //                         };
+    //                         z.entryPrice = (z.qouteAssetAmount/z.baseAssetAmount) * (z.baseAssetAmount < 0 ? -1 : 1)
+    //                         z.profit = (z.baseAssetValue - z.qouteAssetAmount) * (z.baseAssetAmount < 0 ? -1 : 1)
+    //                         return JSON.stringify(z);
+    //                     })
+    //                 }
+    //                )
+    //             })
+    //         })
+    //     })
+    // })).then(promises => {
+    //     console.log(promises);
+    // })
     console.log([getTable(
         ([[...workerData].map(([wrkr, mapData]) => {
             let dataFromMap = JSON.parse(mapData)
             let r =  {
-                "Users Within Range": parseFloat(dataFromMap.margin.length),
+                "Users Within Range": dataFromMap.margin.length,
                 "User Count": parseFloat(dataFromMap.userCount),
                 "Times Checked": parseFloat(dataFromMap.intervalCount),
                 "Total MS": parseFloat(dataFromMap.time.total),
@@ -170,7 +206,6 @@ const getNewUsers = () => {
 
 const start = Date.now();
 
-
 // starts each worker and handles the information being sent back
 const startWorkers = (workerCount) : Promise<void> => {
     return new Promise((resolve => {
@@ -203,6 +238,9 @@ const startWorkers = (workerCount) : Promise<void> => {
                     try {
                         let d = JSON.parse(data.toString('utf8'));
                         if (d.worker !== undefined && d.data !== undefined) {
+                            JSON.parse(d.data.unrealizedPnLMap).forEach(([pub, val]) => {
+                                unrealizedPNLMap.set(pub, val);
+                            })
                             d.data.checked = {
                                 min: Math.min(...d.data.checked),
                                 avg: (d.data.checked.reduce((a, b) => a+b, 0)/d.data.checked.length).toFixed(2),
@@ -213,7 +251,8 @@ const startWorkers = (workerCount) : Promise<void> => {
                                 min: Math.min(...d.data.margin, 0),
                                 avg: d.data.margin.length === 0 ? 0 : ([...d.data.margin].reduce((a, b) => a+b, 0)/(d.data.margin.length)).toFixed(2),
                                 max: Math.max(...d.data.margin, 0),
-                                total: ([...d.data.margin].reduce((a, b) => a+b, 0))
+                                total: ([...d.data.margin].reduce((a, b) => a+b, 0)),
+                                length: d.data.margin.length
                             }
                             d.data.time = {
                                 min: Math.min(...d.data.time).toFixed(2),
@@ -260,15 +299,23 @@ const startWorkers = (workerCount) : Promise<void> => {
 // subscribe the users
 // start the get new users loop
 const startLiquidationBot = (workerCount) => {
+
     _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount"]).then(() => {
+    
         startWorkers(workerCount).then(() => {
+
             console.clear();
+
             let userDataFromStorage = JSON.parse(atob(localStorage.getItem('programUserAccounts')!));
+
             loopSubscribeUser(userDataFromStorage as Array<{ publicKey: string, authority: string}>)
+
             setTimeout(() => {
                 getNewUsers();
             }, 60 * 1000 * userUpdateTimeInMinutes)
+
         })
+
     })
 
 }

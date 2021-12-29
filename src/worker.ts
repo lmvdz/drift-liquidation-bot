@@ -198,6 +198,8 @@ const calculatePositionPNL = (
 }
 
 
+const unrealizedPnLMap : Map<string, string> = new Map<string, string>();
+
 const getMarginRatio = (pub: string) => {
     const user = users.get(pub)
     const positions = user.getUserPositionsAccount().positions;
@@ -214,6 +216,8 @@ const getMarginRatio = (pub: string) => {
         totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
         unrealizedPNL = unrealizedPNL.add(calculatePositionPNL(market, position, baseAssetAmountValue, true));
     })
+
+    unrealizedPnLMap.set(pub, unrealizedPNL.toString());
 
     if (totalPositionValue.eq(ZERO)) {
         return BN_MAX;
@@ -233,9 +237,11 @@ const prioSet : Map<string, NodeJS.Timer> = new Map<string, NodeJS.Timer>();
 
 const check = (pub : string) => {
     const marginRatio = getMarginRatio(pub)
+    if (marginRatio.lte(slipLiq)) {
+        liq(pub, marginRatio)
+        console.log('liq attempt ' + pub + ' ' + marginRatio.toNumber());
+    }
     marginRatios.set(pub, marginRatio)
-    console.log('check ' + pub + ' ' + marginRatio.toNumber());
-    liq(pub, marginRatio)
 }
 
 const checkUser = (pub : string) : Promise<{pub: string, marginRatio: BN, closeToLiquidation: boolean}> => {
@@ -338,6 +344,7 @@ const startWorker = () => {
                         checked: numUsersChecked,
                         margin: [...marginRatioMap.values()],
                         time: checkTime,
+                        unrealizedPnLMap: JSON.stringify([...unrealizedPnLMap])
                     }
                 }
                 console.log(JSON.stringify(x))

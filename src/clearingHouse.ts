@@ -1,10 +1,14 @@
 // used to get environment variables
-import { initialize, DriftEnv, ClearingHouse } from '@drift-labs/sdk';
-import pkg from '@project-serum/anchor'
+import { initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
+import pkg, { BN } from '@project-serum/anchor'
 const {Provider, Wallet} = pkg
 import { Keypair, Connection, PublicKey } from '@solana/web3.js';
 import { config } from 'dotenv';
 import { from_b58 } from './util/base56.js';
+
+import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client'
+
+
 config({path: './.env.local'});
 
 const botKeyEnvVariable = "BOT_KEY"
@@ -53,7 +57,5 @@ const genesysgoClearingHouse = ClearingHouse.from(
         sdkConfig.CLEARING_HOUSE_PROGRAM_ID
     )
 )
-
-
 
 export default { genesysgoClearingHouse, genesysgoConnection }

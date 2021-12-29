@@ -63,10 +63,10 @@ export const getLiquidationChart = (liquidatorMap : Map<string, Array<Liquidatio
         })
     });
     let liquidatorCharts = {}
-    const daysBetween = (lastLiquidation.getTime() - firstLiquidation.getTime()) / ( 1000 * 3600 * 4);
+    const daysBetween = (lastLiquidation.getTime() - firstLiquidation.getTime()) / ( 1000 * 3600 * 7);
     for(let x = 0; x < daysBetween; x++) {
-        let min = new Date(firstLiquidation.getTime() + (x * 1000 * 3600 * 4))
-        let max = new Date(firstLiquidation.getTime() + ((x+1) * 1000 * 3600 * 4))
+        let min = new Date(firstLiquidation.getTime() + (x * 1000 * 3600 * 7))
+        let max = new Date(firstLiquidation.getTime() + ((x+1) * 1000 * 3600 * 7))
         // console.log(min, max)
         liquidatorsWithLiquidations.forEach(([liquidator, liquidations]) => {
             if (liquidatorCharts[liquidator] === undefined) {
