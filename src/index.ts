@@ -260,7 +260,7 @@ const startWorkers = (workerCount) : Promise<void> => {
                                 max: Math.max(...d.data.data.time).toFixed(2),
                                 total: (d.data.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
                             }
-                            workerData.set(d.worker, JSON.stringify(d.data.data));
+                            workerData.set(d.data.worker, JSON.stringify(d.data.data));
                             if (printTimeout) {
                                 clearTimeout(printTimeout);
                             }
