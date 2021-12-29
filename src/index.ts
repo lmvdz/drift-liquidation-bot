@@ -251,7 +251,8 @@ const startWorkers = (workerCount) : Promise<void> => {
                                 min: Math.min(...d.data.data.margin, 0),
                                 avg: d.data.data.margin.length === 0 ? 0 : ([...d.data.data.margin].reduce((a, b) => a+b, 0)/(d.data.data.margin.length)).toFixed(2),
                                 max: Math.max(...d.data.data.margin, 0),
-                                total: ([...d.data.data.margin].reduce((a, b) => a+b, 0))
+                                total: ([...d.data.data.margin].reduce((a, b) => a+b, 0)),
+                                length: d.data.data.margin.length
                             }
                             d.data.data.time = {
                                 min: Math.min(...d.data.data.time).toFixed(2),
