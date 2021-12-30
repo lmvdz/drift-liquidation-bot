@@ -315,11 +315,18 @@ const updateAllMarginRatios = () : Promise<[number, number]> => {
 let intervalCount = 0
 let numUsersChecked = new Array<number>();
 let checkTime = new Array<number>();
-
+let startWorkerTryCount = 0;
 // liquidation bot, where the magic happens
 const startWorker = () => {
-    _.genesysgoClearingHouse.subscribe().then(() => {
-        (async () => {
+    if (startWorkerTryCount > 10) {
+        process.exit();
+    }
+    startWorkerTryCount++;
+    (async () => {
+        if (!_.genesysgoClearingHouse.isSubscribed) {
+            await _.genesysgoClearingHouse.subscribe()
+            startWorker()
+        } else {
             setInterval(() => {
                 updateAllMarginRatios()
             }, (60 * 1000 * updateAllMarginRatiosInMinutes))
@@ -352,10 +359,9 @@ const startWorker = () => {
                 checkTime = new Array<number>();
                 marginRatioMap = new Map<string, number>();
             }, 60 * 1000 * workerLoopTimeInMinutes)
-        })();
-    }).catch(error => {
-        process.send( JSON.stringify({ type: 'error', data: error }) );
-    })
+        }
+        
+    })();
 }
 
 
