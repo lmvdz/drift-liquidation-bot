@@ -359,30 +359,38 @@ const startWorker = () => {
 }
 
 
+const subscribeUser = (pub : string) => {
+    if (users.get(pub) === undefined || users.get(pub) === null) {
+        const user = ClearingHouseUser.from(
+            _.genesysgoClearingHouse,
+            new PublicKey(pub)
+        );
+        user.subscribe().then(() => {
+            users.set(pub, user);
+            if (user.getUserPositionsAccount().positions.length > 0) {
+                prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+            }
+            marginRatios.set(pub, getMarginRatio(pub));
+    
+            user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
+                prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                marginRatios.set(pub, getMarginRatio(pub));
+            })
+            
+        }).catch(error => {
+            setTimeout(() => {
+                subscribeUser(pub)
+            }, 10000)
+        })       
+    }
+    
+}
 
 
 const processMessage = (data : MessageData) => {
     if (data.dataSource === 'user') {
         if (data.programUserAccount !== undefined && data.programUserAccount !== null) {
-            if (users.get(data.programUserAccount.publicKey) === undefined || users.get(data.programUserAccount.publicKey) === null) {
-                const user = ClearingHouseUser.from(
-                    _.genesysgoClearingHouse,
-                    new PublicKey(data.programUserAccount.authority)
-                );
-                user.subscribe().then(() => {
-                    users.set(data.programUserAccount.publicKey, user);
-                    if (user.getUserPositionsAccount().positions.length > 0) {
-                        prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
-                    }
-                    marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
-
-                    user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
-                        prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
-                        marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
-                    })
-                    
-                })
-            }
+            subscribeUser(data.programUserAccount.publicKey)
         }
     }
     // const user = users.get(data.pub) ?? { positions: [] as Array<UserPosition>, account: {} as UserAccount } as User
