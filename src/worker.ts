@@ -378,9 +378,8 @@ const subscribeUser = (pub : string) => {
             })
             
         }).catch(error => {
-            setTimeout(() => {
-                subscribeUser(pub)
-            }, 10000)
+            process.send( JSON.stringify({ type: 'error', data: error }) );
+            subscribeUser(pub);
         })       
     }
     
