@@ -233,6 +233,19 @@ const startWorkers = (workerCount) : Promise<void> => {
                 )
             )
             const worker = workers.get(workerUUID)
+
+            worker.stderr.on('data', (data : Buffer) => {
+                console.log(data.toString());
+            })
+
+            worker.on('close', (code, sig) => {
+                console.log(code)
+            })
+
+            worker.stdout.on('data', (data: Buffer) => {
+                console.log(data.toString());
+            })
+
             worker.on('message', (data : string) => {
                 let d = JSON.parse(data);
                 switch(d.type) {
