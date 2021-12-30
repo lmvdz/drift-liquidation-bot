@@ -29,15 +29,11 @@ import { atob } from "./util/atob.js"
 import BN from 'bn.js'
 
 // used to store the data, uses the same api calls as window.localStorage but works with nodejs
-import { LocalStorage } from 'node-localstorage'
 import { Transaction,TransactionInstruction } from '@solana/web3.js';
 
 const wrapInTx = (instruction: TransactionInstruction) : Transaction  => {
 	return new Transaction().add(instruction);
 }
-
-
-const localStorage = new LocalStorage('./storage');
 // const workerStorage = new LocalStorage('./storage/workers')
 
 const args = process.argv.slice(2);
@@ -128,7 +124,6 @@ const liquidate = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<stri
 
 const prepareUserLiquidationIX = (clearingHouse: ClearingHouse, user: ClearingHouseUser) => {
     user.getUserAccountPublicKey().then(pub => prepareLiquidationIX(clearingHouse, pub))
-    
 }
 
 const prepareLiquidationIX = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<void> => {
@@ -147,16 +142,16 @@ const liq = (pub: string, marginRatio: BN) : Promise<void> => {
     return new Promise((resolve, reject) => {
         liquidate(_.genesysgoClearingHouse, new PublicKey(pub)).then((tx : string) => {
             getLiqTransactionProfit(tx).then((balanceChange : number) => {
-                let liquidationStorage = localStorage.getItem('liquidations');
-                if (liquidationStorage === undefined || liquidationStorage == null) {
-                    liquidationStorage = []
-                } else {
-                    liquidationStorage = JSON.parse(atob(liquidationStorage))
+                let liquidationStorage = []
+                if (fs.pathExistsSync('./storage/liquidations')) {
+                    liquidationStorage = JSON.parse(atob(fs.readFileSync('./storage/liquidations', 'utf8')));
                 }
                 if (!liquidationStorage.some(liquidation => liquidation.tx === tx)) {
                     liquidationStorage.push({ pub: pub, tx, balanceChange })
                 }
-                localStorage.setItem('liquidations', btoa(JSON.stringify(liquidationStorage)))
+                
+                
+                fs.writeFileSync('./storage/liquidations', btoa(JSON.stringify(liquidationStorage)))
                 process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC` } ))
             })
             resolve()

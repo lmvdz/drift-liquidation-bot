@@ -8,8 +8,6 @@ import { randomUUID } from 'crypto'
 
 import { default as _ } from './clearingHouse.js'
 
-import { LocalStorage } from 'node-localstorage';
-
 import { getTable } from './util/table.js'
 
 import {
@@ -196,23 +194,23 @@ const getNewUsers = () => {
     const newUsersWorker = exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
         if (stdout.includes('done')) {
             setTimeout(() => {
-                getUsersFromFile()
+                if (fs.pathExistsSync('./storage/programUserAccounts')) {
+                    let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
+                    loopSubscribeUser(JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>)
+                } else {
+                    console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
+                    workers.forEach(worker => worker.kill());
+                    process.exit();
+                }
                 newUsersWorker.kill()
             }, 10000)
+        } else {
+            console.log(stdout, stderr, error);
+            newUsersWorker.kill();
+            workers.forEach(worker => worker.kill());
+            process.exit();
         }
     });
-}
-
-
-const getUsersFromFile = () => {
-    const localStorage = new LocalStorage('./storage');
-    let usersFromFile = localStorage.getItem('programUserAccounts');
-    if (usersFromFile !== undefined && usersFromFile !== null) {
-        loopSubscribeUser(JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>)
-    } else {
-        console.log('storage/programUserAccounts is null.... if the file is there and isn\'t empty, just start the bot again!')
-    }
-    
 }
 
 const start = Date.now();
@@ -312,12 +310,8 @@ const startLiquidationBot = (workerCount) => {
         startWorkers(workerCount).then(() => {
 
             console.clear();
-
-            const localStorage = new LocalStorage('./storage');
-            
-            let userDataFromStorage = localStorage.getItem('programUserAccounts');
-
-            if (userDataFromStorage !== undefined && userDataFromStorage !== null) {
+            if (fs.pathExistsSync('./storage/programUserAccounts')) {
+                let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
                 loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
             } else {
                 getNewUsers();
