@@ -232,7 +232,7 @@ const startWorker = (workerUUID: string, index: number) => {
     // os.setPriority(worker.pid, -20)
     if (worker.stderr)
     worker.stderr.on('data', (data : Buffer) => {
-        console.log(data.toString());
+        // console.log(data.toString());
     })
 
     worker.on('close', (code, sig) => {
@@ -243,7 +243,7 @@ const startWorker = (workerUUID: string, index: number) => {
     })
     if (worker.stdout)
     worker.stdout.on('data', (data: Buffer) => {
-        console.log(data.toString());
+        // console.log(data.toString());
     })
 
     worker.on('message', (data : string) => {
