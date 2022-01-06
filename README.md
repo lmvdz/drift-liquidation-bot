@@ -1,6 +1,10 @@
 # Lmvdzande's Liquidation Bot  
   
 # This branch is used to test splitting the bot into threaded processes for best performance of the bot  
+
+# Checkout [Drift Protocol](https://docs.drift.trade/) for more information!
+
+# Donations can be sent to my SOL address 8Ci5UbpoAFL5sAj4jeKwADceYrDxKQktXJnn1Vwgug5m
   
 By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript.  
 
