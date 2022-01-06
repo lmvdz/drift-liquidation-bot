@@ -159,6 +159,9 @@ const liq = (pub: string, marginRatio: BN) : Promise<void> => {
 
             if (error.message.includes('custom program error: 0x130')) {
                 process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}` } ))
+            } else if (error.message.includes('custom program error: 0x1774')) {
+                process.send( JSON.stringify({ type: 'error', data: 'error 0x1774 - recalulating liquidation transaction'}));
+                prepareLiquidationIX(_.genesysgoClearingHouse, new PublicKey(pub))
             }
             resolve()
         });

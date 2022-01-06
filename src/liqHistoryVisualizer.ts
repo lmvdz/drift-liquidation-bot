@@ -2,16 +2,7 @@ import { LiquidationHistoryAccount } from '@drift-labs/sdk';
 import {table} from './util/table.js'
 import  * as asciichart from 'asciichart'
 
-export interface Liquidation { 
-    ts: Date,
-    partial: boolean, 
-    user: string, 
-    userAuthority: string,
-    feeToLiquidator: number,
-    liquidator: string,
-    recordId: string, 
-    margin_ratio: number
-}
+
 
 export const asciichartColors = [
    "red",
@@ -32,6 +23,81 @@ export const asciichartColors = [
 ]
 
 export const liquidatorMap : Map<string, Array<Liquidation>> = new Map<string, Array<Liquidation>>();
+
+
+
+export interface Liquidation { 
+    ts: Date,
+    partial: boolean, 
+    user: string, 
+    userAuthority: string,
+    feeToLiquidator: number,
+    liquidator: string,
+    recordId: string, 
+    margin_ratio: number
+}
+
+
+export const mapHistoryAccountToLiquidationsArray = (liquidationHistoryAccount : LiquidationHistoryAccount) : Array<Liquidation> => {
+    return liquidationHistoryAccount.liquidationRecords.map(liquidation => {
+        return {
+            recordId: liquidation.recordId.toString(),
+            ts: new Date(liquidation.ts.toNumber() * 1000),
+            partial: liquidation.partial, 
+            user: liquidation.user.toBase58(), 
+            userAuthority: liquidation.userAuthority.toBase58(),
+            feeToLiquidator: (liquidation.feeToLiquidator.toNumber() / 1000000),
+            liquidator: liquidation.liquidator.toBase58(),
+            margin_ratio: liquidation.marginRatio.toNumber() / 100
+        } as Liquidation
+    });
+}
+
+export const updateLiquidatorMap = ( liqMapped:Array<Liquidation> ) : Map<string, Array<Liquidation>> => {
+    liqMapped.forEach(liq => {
+        let liquidations = liquidatorMap.get(liq.liquidator)
+        if (liquidations === undefined) {
+            liquidatorMap.set(liq.liquidator, new Array<Liquidation>(liq))
+        } else {
+            if (!liquidations.some(existingLiq => existingLiq.recordId === liq.recordId)) {
+                liquidations.push(liq)
+            }
+            liquidatorMap.set(liq.liquidator, liquidations)
+        }
+    })
+    return liquidatorMap
+}
+
+export const getLiquidatorProfitTables = (liquidatorMap : Map<string, Array<Liquidation>>, filter?: Array<string>) : Array<any> => {
+    return [
+        ([...liquidatorMap].filter(([liquidator, liquidations]) => {
+            return liquidations.map(liquidation => liquidation.feeToLiquidator).reduce((a, b) => (a + b), 0) > 0
+        }).map(([liquidator, liquidations]) => {
+            return {
+                liquidator,
+                profit: liquidations.map(liquidation => liquidation.feeToLiquidator).reduce((a, b) => (a + b), 0)
+            }
+        }).sort((a, b) => b.profit - a.profit).map((data => {
+            return {
+                "Liquidator": data.liquidator,
+                "Profit": data.profit + " USDC"
+            }
+        }))), 
+        ([...liquidatorMap.values()].flat().sort((a, b) => {
+            return b.ts.getTime() - a.ts.getTime()
+        }).slice(0, 20).map(newest => {
+            return {
+                "Liquidator": newest.liquidator,
+                "Profit": "+" +newest.feeToLiquidator + " USDC",
+                "Timestmap": newest.ts.toLocaleDateString() + " " + newest.ts.toLocaleTimeString(),
+                "Margin": newest.margin_ratio  + " %"
+            }
+        }))
+    ];
+}
+
+
+
 
 export const print = (liquidatorMap : Map<string, Array<Liquidation>>, filter?: Array<string>) => {
     console.clear()
@@ -104,62 +170,4 @@ export const getLiquidationChart = (liquidatorMap : Map<string, Array<Liquidatio
     // }))
     
 
-}
-
-export const mapHistoryAccountToLiquidationsArray = (liquidationHistoryAccount : LiquidationHistoryAccount) : Array<Liquidation> => {
-    return liquidationHistoryAccount.liquidationRecords.map(liquidation => {
-        return {
-            recordId: liquidation.recordId.toString(),
-            ts: new Date(liquidation.ts.toNumber() * 1000),
-            partial: liquidation.partial, 
-            user: liquidation.user.toBase58(), 
-            userAuthority: liquidation.userAuthority.toBase58(),
-            feeToLiquidator: (liquidation.feeToLiquidator.toNumber() / 1000000),
-            liquidator: liquidation.liquidator.toBase58(),
-            margin_ratio: liquidation.marginRatio.toNumber() / 100
-        } as Liquidation
-    });
-}
-
-export const updateLiquidatorMap = ( liqMapped:Array<Liquidation> ) : Map<string, Array<Liquidation>> => {
-    liqMapped.forEach(liq => {
-        let liquidations = liquidatorMap.get(liq.liquidator)
-        if (liquidations === undefined) {
-            liquidatorMap.set(liq.liquidator, new Array<Liquidation>(liq))
-        } else {
-            if (!liquidations.some(existingLiq => existingLiq.recordId === liq.recordId)) {
-                liquidations.push(liq)
-            }
-            liquidatorMap.set(liq.liquidator, liquidations)
-        }
-    })
-    return liquidatorMap
-}
-
-export const getLiquidatorProfitTables = (liquidatorMap : Map<string, Array<Liquidation>>, filter?: Array<string>) : Array<any> => {
-    return [
-        ([...liquidatorMap].filter(([liquidator, liquidations]) => {
-            return liquidations.map(liquidation => liquidation.feeToLiquidator).reduce((a, b) => (a + b), 0) > 0
-        }).map(([liquidator, liquidations]) => {
-            return {
-                liquidator,
-                profit: liquidations.map(liquidation => liquidation.feeToLiquidator).reduce((a, b) => (a + b), 0)
-            }
-        }).sort((a, b) => b.profit - a.profit).map((data => {
-            return {
-                "Liquidator": data.liquidator,
-                "Profit": data.profit + " USDC"
-            }
-        }))), 
-        ([...liquidatorMap.values()].flat().sort((a, b) => {
-            return b.ts.getTime() - a.ts.getTime()
-        }).slice(0, 20).map(newest => {
-            return {
-                "Liquidator": newest.liquidator,
-                "Profit": "+" +newest.feeToLiquidator + " USDC",
-                "Timestmap": newest.ts.toLocaleDateString() + " " + newest.ts.toLocaleTimeString(),
-                "Margin": newest.margin_ratio  + " %"
-            }
-        }))
-    ];
 }

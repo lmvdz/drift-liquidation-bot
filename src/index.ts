@@ -1,6 +1,8 @@
 import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
 import fs from 'fs-extra'
+import os from 'os'
+
 // const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
 // spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
@@ -50,7 +52,7 @@ const minLiquidationDistance = 2
 const partialLiquidationSlippage = 0.8
 
 // how many workers to check for users will there be
-const workerCount = 80;
+const workerCount = 40;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -215,95 +217,113 @@ const getNewUsers = () => {
 
 const start = Date.now();
 
+let started = 0;
+
+
+const startWorker = (workerUUID: string, index: number) => {
+    workers.set(workerUUID, 
+        fork("./src/worker.js",
+            [workerCount,index,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1)].map(x => x + ""),
+            {
+                stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ]
+            }
+        )
+    )
+    const worker = workers.get(workerUUID)
+    // os.setPriority(worker.pid, -20)
+
+    worker.stderr.on('data', (data : Buffer) => {
+        // console.log(data.toString());
+    })
+
+    worker.on('close', (code, sig) => {
+        worker.kill();
+        workers.delete(workerUUID)
+        startWorker(workerUUID, index);
+        console.log(code)
+    })
+
+    worker.stdout.on('data', (data: Buffer) => {
+        // console.log(data.toString());
+    })
+
+    worker.on('message', (data : string) => {
+        let d = JSON.parse(data);
+        switch(d.type) {
+            case 'started':
+                if (started < workerCount) {
+                    started++
+                    console.log(started);
+                    if (started === workerCount) {
+                        console.clear();
+                        if (fs.pathExistsSync('./storage/programUserAccounts')) {
+                            let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
+                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
+                        } else {
+                            getNewUsers();
+                        }
+
+                        setTimeout(() => {
+                            getNewUsers();
+                        }, 60 * 1000 * userUpdateTimeInMinutes)
+                    }
+                }
+                break;
+            case 'data':
+                if (d.data.worker !== undefined && d.data.data !== undefined) {
+                    JSON.parse(d.data.data.unrealizedPnLMap).forEach(([pub, val]) => {
+                        unrealizedPNLMap.set(pub, val);
+                    })
+                    d.data.data.checked = {
+                        min: Math.min(...d.data.data.checked),
+                        avg: (d.data.data.checked.reduce((a, b) => a+b, 0)/d.data.data.checked.length).toFixed(2),
+                        max: Math.max(...d.data.data.checked),
+                        total: parseInt((d.data.data.checked.reduce((a, b) => a+b, 0))+""),
+                    }
+                    d.data.data.margin = {
+                        min: Math.min(...d.data.data.margin, 0),
+                        avg: d.data.data.margin.length === 0 ? 0 : ([...d.data.data.margin].reduce((a, b) => a+b, 0)/(d.data.data.margin.length)).toFixed(2),
+                        max: Math.max(...d.data.data.margin, 0),
+                        total: ([...d.data.data.margin].reduce((a, b) => a+b, 0)),
+                        length: d.data.data.margin.length
+                    }
+                    d.data.data.time = {
+                        min: Math.min(...d.data.data.time).toFixed(2),
+                        avg: (d.data.data.time.reduce((a, b) => a+b, 0)/d.data.data.time.length).toFixed(2),
+                        max: Math.max(...d.data.data.time).toFixed(2),
+                        total: (d.data.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
+                    }
+                    workerData.set(d.data.worker, JSON.stringify(d.data.data));
+                    if (printTimeout) {
+                        clearTimeout(printTimeout);
+                    }
+                    printTimeout = setTimeout(() => print(), 5000)
+                }
+                break;
+            case 'out':
+                if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
+                    fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
+                }
+                fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
+                break;
+            case 'error':
+                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
+                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
+                }
+                fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
+                break;
+        }
+
+    })
+}
+
+
 // starts each worker and handles the information being sent back
 const startWorkers = (workerCount) : Promise<void> => {
     return new Promise((resolve => {
-        let started = 0;
         for(let x = workers.size; x < workerCount; x++) {
             let workerUUID = randomUUID()
-            if (workerCount <= 10) {
-                // spinnies.add(workerUUID.split('-').join('')+'', { text: 'worker - ' + workerUUID });
-            }
-            workers.set(workerUUID, 
-                fork("./src/worker.js",
-                    [workerCount,x,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (x+1) : 1)].map(x => x + ""),
-                    {
-                        stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ]
-                    }
-                )
-            )
-            const worker = workers.get(workerUUID)
-
-            worker.stderr.on('data', (data : Buffer) => {
-                console.log(data.toString());
-            })
-
-            worker.on('close', (code, sig) => {
-                console.log(code)
-            })
-
-            worker.stdout.on('data', (data: Buffer) => {
-                console.log(data.toString());
-            })
-
-            worker.on('message', (data : string) => {
-                let d = JSON.parse(data);
-                switch(d.type) {
-                    case 'started':
-                        if (started < workerCount) {
-                            started++
-                            console.log(started);
-                            if (started === workerCount) {
-                                resolve();
-                            }
-                        }
-                        break;
-                    case 'data':
-                        if (d.data.worker !== undefined && d.data.data !== undefined) {
-                            JSON.parse(d.data.data.unrealizedPnLMap).forEach(([pub, val]) => {
-                                unrealizedPNLMap.set(pub, val);
-                            })
-                            d.data.data.checked = {
-                                min: Math.min(...d.data.data.checked),
-                                avg: (d.data.data.checked.reduce((a, b) => a+b, 0)/d.data.data.checked.length).toFixed(2),
-                                max: Math.max(...d.data.data.checked),
-                                total: parseInt((d.data.data.checked.reduce((a, b) => a+b, 0))+""),
-                            }
-                            d.data.data.margin = {
-                                min: Math.min(...d.data.data.margin, 0),
-                                avg: d.data.data.margin.length === 0 ? 0 : ([...d.data.data.margin].reduce((a, b) => a+b, 0)/(d.data.data.margin.length)).toFixed(2),
-                                max: Math.max(...d.data.data.margin, 0),
-                                total: ([...d.data.data.margin].reduce((a, b) => a+b, 0)),
-                                length: d.data.data.margin.length
-                            }
-                            d.data.data.time = {
-                                min: Math.min(...d.data.data.time).toFixed(2),
-                                avg: (d.data.data.time.reduce((a, b) => a+b, 0)/d.data.data.time.length).toFixed(2),
-                                max: Math.max(...d.data.data.time).toFixed(2),
-                                total: (d.data.data.time.reduce((a, b) => a+b, 0)).toFixed(2),
-                            }
-                            workerData.set(d.data.worker, JSON.stringify(d.data.data));
-                            if (printTimeout) {
-                                clearTimeout(printTimeout);
-                            }
-                            printTimeout = setTimeout(() => print(), 5000)
-                        }
-                        break;
-                    case 'out':
-                        if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
-                            fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
-                        }
-                        fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data)
-                        break;
-                    case 'error':
-                        if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
-                            fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
-                        }
-                        fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data)
-                        break;
-                }
-
-            })
+            startWorker(workerUUID, x);
         }
     }));
     
@@ -319,23 +339,8 @@ const startWorkers = (workerCount) : Promise<void> => {
 const startLiquidationBot = (workerCount) => {
 
     _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount"]).then(() => {
-    
-        startWorkers(workerCount).then(() => {
 
-            console.clear();
-            if (fs.pathExistsSync('./storage/programUserAccounts')) {
-                let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
-            } else {
-                getNewUsers();
-            }
-
-            setTimeout(() => {
-                getNewUsers();
-            }, 60 * 1000 * userUpdateTimeInMinutes)
-
-        })
-
+        startWorkers(workerCount);
     })
 
 }
