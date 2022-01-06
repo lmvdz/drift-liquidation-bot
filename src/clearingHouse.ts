@@ -1,7 +1,8 @@
 // used to get environment variables
 import { initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
 import pkg, { BN } from '@project-serum/anchor'
-const {Provider, Wallet} = pkg
+import { Wallet } from '@drift-labs/sdk';
+const {Provider} = pkg
 import { Keypair, Connection, PublicKey } from '@solana/web3.js';
 import { config } from 'dotenv';
 import { from_b58 } from './util/base56.js';

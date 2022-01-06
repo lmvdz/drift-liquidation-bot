@@ -152,15 +152,15 @@ const liq = (pub: string, marginRatio: BN) : Promise<void> => {
                 
                 
                 fs.writeFileSync('./storage/liquidations', btoa(JSON.stringify(liquidationStorage)))
-                process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC` } ))
+                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC` } ))
             })
             resolve()
         }).catch(error => {
 
             if (error.message.includes('custom program error: 0x130')) {
-                process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}` } ))
+                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}` } ))
             } else if (error.message.includes('custom program error: 0x1774')) {
-                process.send( JSON.stringify({ type: 'error', data: 'error 0x1774 - recalulating liquidation transaction'}));
+                if (process.send) process.send( JSON.stringify({ type: 'error', data: 'error 0x1774 - recalulating liquidation transaction'}));
                 prepareLiquidationIX(_.genesysgoClearingHouse, new PublicKey(pub))
             }
             resolve()
@@ -239,7 +239,7 @@ const check = (pub : string) => {
     const marginRatio = getMarginRatio(pub)
     if (marginRatio.lte(slipLiq)) {
         liq(pub, marginRatio)
-        process.send( JSON.stringify({ type: 'out', data: 'liq attempt ' + pub + ' ' + marginRatio.toNumber()/100 }));
+        if (process.send) process.send( JSON.stringify({ type: 'out', data: 'liq attempt ' + pub + ' ' + marginRatio.toNumber()/100 }));
     }
     marginRatios.set(pub, marginRatio)
 }
@@ -249,7 +249,7 @@ const checkUser = (pub : string) : Promise<{pub: string, marginRatio: BN, closeT
         const marginRatio = getMarginRatio(pub)
         const closeToLiquidation = marginRatio.lte(slipLiq)
         if (closeToLiquidation) {
-            process.send( JSON.stringify({ type: 'out', data: pub + ' close to liq ' + marginRatio.toNumber()/100 }));
+            if (process.send) process.send( JSON.stringify({ type: 'out', data: pub + ' close to liq ' + marginRatio.toNumber()/100 }));
             if (!prioSet.has(pub)) {
                 prioSet.set(pub, setInterval(() => {
                     check(pub)
@@ -355,7 +355,7 @@ const startWorker = () => {
                     }
                 }
                 // console.log(JSON.stringify(x))
-                process.send( JSON.stringify({ type: 'data', data: x }));
+                if (process.send) process.send( JSON.stringify({ type: 'data', data: x }));
         
                 intervalCount = 0
                 numUsersChecked = new Array<number>();
@@ -426,4 +426,4 @@ process.on('message', (data : MessageData) => {
 
 startWorker()
 
-process.send( JSON.stringify({type: 'started' }));
+if (process.send) process.send( JSON.stringify({type: 'started' }));

@@ -222,18 +222,17 @@ let started = 0;
 
 const startWorker = (workerUUID: string, index: number) => {
     workers.set(workerUUID, 
-        fork("./src/worker.js",
+        fork(
+            "./src/worker.js",
             [workerCount,index,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1)].map(x => x + ""),
-            {
-                stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ]
-            }
+            { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
         )
     )
     const worker = workers.get(workerUUID)
     // os.setPriority(worker.pid, -20)
-
+    if (worker.stderr)
     worker.stderr.on('data', (data : Buffer) => {
-        // console.log(data.toString());
+        console.log(data.toString());
     })
 
     worker.on('close', (code, sig) => {
@@ -242,9 +241,9 @@ const startWorker = (workerUUID: string, index: number) => {
         startWorker(workerUUID, index);
         console.log(code)
     })
-
+    if (worker.stdout)
     worker.stdout.on('data', (data: Buffer) => {
-        // console.log(data.toString());
+        console.log(data.toString());
     })
 
     worker.on('message', (data : string) => {
