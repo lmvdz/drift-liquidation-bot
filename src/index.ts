@@ -242,17 +242,18 @@ const startWorker = (workerUUID: string, index: number) => {
         console.log('worked died, restarting!')
         setTimeout(() => {
             console.log('sending users to restarted worker')
+            let newWorker = workers.get(workerUUID);
             if (splitUsersBetweenWorkers) {
                 workerAssignment.forEach((value, key) => {
                     if (workerUUID === value.worker) {
-                        worker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority}})
+                        newWorker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority}})
                     }
                 })
             } else {
                 let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
                 let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>
                 parsedUsers.forEach(user => {
-                    worker.send({dataSource: 'user', programUserAccount: user})
+                    newWorker.send({dataSource: 'user', programUserAccount: user})
                 })
             }
         }, 5000)
