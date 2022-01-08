@@ -52,7 +52,7 @@ const minLiquidationDistance = 2
 const partialLiquidationSlippage = 0.8
 
 // how many workers to check for users will there be
-const workerCount = 40;
+const workerCount = 80;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -67,7 +67,7 @@ const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: stri
 }
 
 // holds which worker uuid has which user pubkey
-const workerAssignment : Map<string, string> = new Map<string, string>();
+const workerAssignment : Map<string, { worker: string, publicKey: string, authority: string }> = new Map<string, { worker: string, publicKey: string, authority: string }>();
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
@@ -86,7 +86,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                 return new Promise((innerResolve) => {
                     if (splitUsersBetweenWorkers) {
                         let worker = [...workers.keys()][index % workerCount];
-                        workerAssignment.set(programUserAccount.publicKey, worker);
+                        workerAssignment.set(programUserAccount.publicKey, { worker, publicKey: programUserAccount.publicKey, authority: programUserAccount.authority });
                         workers.get(worker).send({ dataSource: 'user', programUserAccount })
                         innerResolve()
                     } else {
@@ -239,7 +239,23 @@ const startWorker = (workerUUID: string, index: number) => {
         worker.kill();
         workers.delete(workerUUID)
         startWorker(workerUUID, index);
-        console.log(code)
+        console.log('worked died, restarting!')
+        setTimeout(() => {
+            console.log('sending users to restarted worker')
+            if (splitUsersBetweenWorkers) {
+                workerAssignment.forEach((value, key) => {
+                    if (workerUUID === value.worker) {
+                        worker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority}})
+                    }
+                })
+            } else {
+                let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
+                let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>
+                parsedUsers.forEach(user => {
+                    worker.send({dataSource: 'user', programUserAccount: user})
+                })
+            }
+        }, 5000)
     })
     if (worker.stdout)
     worker.stdout.on('data', (data: Buffer) => {
