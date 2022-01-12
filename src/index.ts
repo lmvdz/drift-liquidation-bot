@@ -18,7 +18,7 @@ import {
     updateLiquidatorMap, 
     mapHistoryAccountToLiquidationsArray
 } from './liqHistoryVisualizer.js'
-import { AMM_RESERVE_PRECISION, BN, calculateBaseAssetValue, ClearingHouseUser, convertBaseAssetAmountToNumber, convertToNumber, Markets, PRICE_TO_QUOTE_PRECISION, QUOTE_PRECISION, UserAccount, UserPosition, UserPositionsAccount, ZERO } from '@drift-labs/sdk';
+import { AMM_RESERVE_PRECISION, BN, calculateBaseAssetValue, calculateEstimatedFundingRate, ClearingHouseUser, convertBaseAssetAmountToNumber, convertToNumber, FUNDING_PAYMENT_PRECISION, Market, Markets, PRICE_TO_QUOTE_PRECISION, QUOTE_PRECISION, UserAccount, UserPosition, UserPositionsAccount, ZERO } from '@drift-labs/sdk';
 import { PublicKey } from '@solana/web3.js';
 // import { BN, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
 // import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
@@ -105,6 +105,51 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
 
 const unrealizedPNLMap : Map<string, string> = new Map<string, string>();
 
+interface MarketFunding {
+    marketId: number,
+    marketSymbol: string,
+    ts: number,
+    rate: string
+}
+
+const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
+
+const getFunding = () => {
+    let fundingTable = [];
+    const funding = _.genesysgoClearingHouse.getFundingRateHistoryAccount().fundingRateRecords
+    funding.map(record => {
+        return {
+            marketId: record.marketIndex.toNumber(),
+            marketSymbol: Markets[record.marketIndex.toNumber()].symbol,
+            ts: record.ts.toNumber(),
+            rate: ((record.fundingRate.toNumber() / record.oraclePriceTwap.toNumber()) * (365.25 * 24) / 100).toFixed(2) + " %"
+        }
+    }).sort((a, b) => {
+        return b.ts - a.ts
+    }).sort((a, b) => {
+        return a.marketId - b.marketId
+    }).forEach(record => {
+        if (!fundingRateMap.has(record.marketSymbol)) {
+            fundingRateMap.set(record.marketSymbol, new Array<MarketFunding>());
+        }
+        let marketFundingArray = fundingRateMap.get(record.marketSymbol);
+        marketFundingArray.push(record);
+        fundingRateMap.set(record.marketSymbol, marketFundingArray)
+    });
+
+    [...fundingRateMap.keys()].forEach(key => {
+        fundingTable.push(fundingRateMap.get(key)[0])
+    });
+
+    return fundingTable.map((lastFundingRate : MarketFunding) => {
+        return {
+            "Market": lastFundingRate.marketSymbol,
+            "Funding Rate (APR)": lastFundingRate.rate
+        }
+    });
+
+}
+
 
 // used to print out the tables and chart to console
 const print = async () => {
@@ -179,7 +224,7 @@ const print = async () => {
             }
         }))
 
-    ), [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
+    ), [getTable(getFunding())], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
 
 }
 // map worker uuid to worker child process
@@ -354,8 +399,7 @@ const startWorkers = (workerCount) : Promise<void> => {
 // start the get new users loop
 const startLiquidationBot = (workerCount) => {
 
-    _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount"]).then(() => {
-
+    _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"]).then(() => {
         startWorkers(workerCount);
     })
 
