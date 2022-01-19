@@ -1,7 +1,6 @@
 import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
 import fs from 'fs-extra'
-import os from 'os'
 
 // const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
 // spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
@@ -18,8 +17,11 @@ import {
     updateLiquidatorMap, 
     mapHistoryAccountToLiquidationsArray
 } from './liqHistoryVisualizer.js'
-import { AMM_RESERVE_PRECISION, BN, calculateBaseAssetValue, calculateEstimatedFundingRate, ClearingHouseUser, convertBaseAssetAmountToNumber, convertToNumber, FUNDING_PAYMENT_PRECISION, Market, Markets, PRICE_TO_QUOTE_PRECISION, QUOTE_PRECISION, UserAccount, UserPosition, UserPositionsAccount, ZERO } from '@drift-labs/sdk';
-import { PublicKey } from '@solana/web3.js';
+
+import { 
+    Markets, 
+} from '@drift-labs/sdk';
+
 // import { BN, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
 // import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
 
@@ -52,7 +54,7 @@ const minLiquidationDistance = 2
 const partialLiquidationSlippage = 0.8
 
 // how many workers to check for users will there be
-const workerCount = 80;
+const workerCount = 1;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -270,14 +272,14 @@ const startWorker = (workerUUID: string, index: number) => {
         fork(
             "./src/worker.js",
             [workerCount,index,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1)].map(x => x + ""),
-            { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
+            // { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
         )
     )
     const worker = workers.get(workerUUID)
     // os.setPriority(worker.pid, -20)
     if (worker.stderr)
     worker.stderr.on('data', (data : Buffer) => {
-        // console.log(data.toString());
+        console.log(data.toString());
     })
 
     worker.on('close', (code, sig) => {
@@ -305,7 +307,7 @@ const startWorker = (workerUUID: string, index: number) => {
     })
     if (worker.stdout)
     worker.stdout.on('data', (data: Buffer) => {
-        // console.log(data.toString());
+        console.log(data.toString());
     })
 
     worker.on('message', (data : string) => {
@@ -387,9 +389,6 @@ const startWorkers = (workerCount) : Promise<void> => {
             startWorker(workerUUID, x);
         }
     }));
-    
-
-    
 }
 
 // start the bot
@@ -399,9 +398,19 @@ const startWorkers = (workerCount) : Promise<void> => {
 // start the get new users loop
 const startLiquidationBot = (workerCount) => {
 
-    _.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"]).then(() => {
-        startWorkers(workerCount);
-    })
+_.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"]).then(() => {
+    
+// _.genesysgoClearingHouse.setPollingRate('liquidationHistoryAccount', 10000);
+// const startedPolling = _.genesysgoClearingHouse.startPolling('liquidationHistoryAccount');
+
+// _.genesysgoClearingHouse.accountSubscriber.eventEmitter.on('fetchedAccount', (accountType) => {
+//     console.log('fetched account ' + accountType);
+//     const stopPolling = _.genesysgoClearingHouse.stopPolling('liquidationHistoryAccount');
+// })
+    
+    
+    startWorkers(workerCount);
+})
 
 }
 

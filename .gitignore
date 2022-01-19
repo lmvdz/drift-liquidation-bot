@@ -5,3 +5,4 @@ package-lock.json
 *.out
 storage/liquidations
 storage/programUserAccounts
+protocol-v1

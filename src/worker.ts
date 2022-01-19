@@ -17,7 +17,7 @@ import {
     UserAccount,
     UserPosition,
     ZERO,
-    
+    BN
 } from '@drift-labs/sdk';
 import fs from 'fs-extra';
 
@@ -25,8 +25,6 @@ import fs from 'fs-extra';
 
 import { btoa } from "./util/btoa.js"
 import { atob } from "./util/atob.js"
-
-import BN from 'bn.js'
 
 // used to store the data, uses the same api calls as window.localStorage but works with nodejs
 import { Transaction,TransactionInstruction } from '@solana/web3.js';
@@ -368,7 +366,8 @@ const startWorker = () => {
 }
 
 
-
+// let pollingUser = false;
+// let polledOnce = false;
 
 const processMessage = (data : MessageData) => {
     if (data.dataSource === 'user') {
@@ -379,13 +378,33 @@ const processMessage = (data : MessageData) => {
                     new PublicKey(data.programUserAccount.authority)
                 );
                 user.subscribe().then(() => {
+
+
+                    // if (!pollingUser) {
+                    //     user.setPollingRate('userAccount', 10000);
+                    //     const startedPolling = user.startPolling('userAccount');
+                    //     if (startedPolling) {
+                    //         console.log('started polling user');
+                    //         pollingUser = true;
+                    //         let startTime = process.hrtime();
+                    //         user.accountSubscriber.eventEmitter.on('fetchedAccount', (accountType) => {
+                    //             let timeSinceStart = process.hrtime(startTime);
+                    //             startTime = process.hrtime();
+                    //             console.log('user ' + accountType.toString() + ' fetch took: ' + timeSinceStart[0] * 1000 + ' ms.')
+                    //         })
+                    //     }
+                        
+                        
+                    // }
+
+
                     users.set(data.programUserAccount.publicKey, user);
                     if (user.getUserPositionsAccount().positions.length > 0) {
                         prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
                     }
                     marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
 
-                    user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
+                    user.accountSubscriber.eventEmitter.on('userPositionsAccountUpdate', () => {
                         prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
                         marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
                     })

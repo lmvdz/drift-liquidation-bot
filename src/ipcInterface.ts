@@ -1,4 +1,4 @@
-import { UserPosition, UserAccount } from "@drift-labs/sdk"
+import { UserPosition, UserAccount } from '@drift-labs/sdk'
 import BN from "bn.js"
 import { PublicKey } from "@solana/web3.js"
 

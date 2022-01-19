@@ -1,13 +1,8 @@
 // used to get environment variables
-import { initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
-import pkg, { BN } from '@project-serum/anchor'
-import { Wallet } from '@drift-labs/sdk';
-const {Provider} = pkg
+import { Wallet, initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient, BN } from '@drift-labs/sdk';
 import { Keypair, Connection, PublicKey } from '@solana/web3.js';
 import { config } from 'dotenv';
 import { from_b58 } from './util/base56.js';
-
-import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client'
 
 
 config({path: './.env.local'});
@@ -47,13 +42,11 @@ const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
 // the one provided is the best one as it allows for unlimited TPS
 const genesysgoConnection = new Connection("https://ssc-dao.genesysgo.net/");
 
-const genesysgoProvider = new Provider(genesysgoConnection, botWallet, Provider.defaultOptions());
-
 
 
 const genesysgoClearingHouse = ClearingHouse.from(
     genesysgoConnection,
-    genesysgoProvider.wallet,
+    botWallet,
     new PublicKey(
         sdkConfig.CLEARING_HOUSE_PROGRAM_ID
     )
