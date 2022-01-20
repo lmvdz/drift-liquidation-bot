@@ -125,7 +125,7 @@ const getFunding = () => {
             marketSymbol: Markets[record.marketIndex.toNumber()].symbol,
             ts: record.ts.toNumber(),
             rate: ((record.fundingRate.toNumber() / record.oraclePriceTwap.toNumber()) * (365.25 * 24) / 100).toFixed(2) + " %"
-        }
+        } as MarketFunding
     }).sort((a, b) => {
         return b.ts - a.ts
     }).sort((a, b) => {

@@ -365,10 +365,6 @@ const startWorker = () => {
     })();
 }
 
-
-// let pollingUser = false;
-// let polledOnce = false;
-
 const processMessage = (data : MessageData) => {
     if (data.dataSource === 'user') {
         if (data.programUserAccount !== undefined && data.programUserAccount !== null) {
@@ -378,25 +374,6 @@ const processMessage = (data : MessageData) => {
                     new PublicKey(data.programUserAccount.authority)
                 );
                 user.subscribe().then(() => {
-
-
-                    // if (!pollingUser) {
-                    //     user.setPollingRate('userAccount', 10000);
-                    //     const startedPolling = user.startPolling('userAccount');
-                    //     if (startedPolling) {
-                    //         console.log('started polling user');
-                    //         pollingUser = true;
-                    //         let startTime = process.hrtime();
-                    //         user.accountSubscriber.eventEmitter.on('fetchedAccount', (accountType) => {
-                    //             let timeSinceStart = process.hrtime(startTime);
-                    //             startTime = process.hrtime();
-                    //             console.log('user ' + accountType.toString() + ' fetch took: ' + timeSinceStart[0] * 1000 + ' ms.')
-                    //         })
-                    //     }
-                        
-                        
-                    // }
-
 
                     users.set(data.programUserAccount.publicKey, user);
                     if (user.getUserPositionsAccount().positions.length > 0) {
@@ -413,24 +390,6 @@ const processMessage = (data : MessageData) => {
             }
         }
     }
-    // const user = users.get(data.pub) ?? { positions: [] as Array<UserPosition>, account: {} as UserAccount } as User
-    // if (data.userPositionArray.length > 0) {
-    //     user.positions = data.userPositionArray.map(convertUserPositionFromIPC);
-    //     if (data.dataSource === 'userPositionsData') {
-    //         usersLiquidationDistance.set(data.pub, calcDistanceToLiq(getMarginRatio(data.pub)));
-    //     }
-    // }
-    // if (data.userAccount !== null) {
-    //     user.account = convertUserAccountFromIPC(data.userAccount)
-    //     if (data.dataSource === 'userAccountData') {
-    //         usersLiquidationDistance.set(data.pub, calcDistanceToLiq(getMarginRatio(data.pub)));
-    //     }
-    // }
-    // // console.log(dataSource, JSON.stringify(user))
-    // users.set(data.pub, user);
-    // if (data.dataSource === 'preExisting') {
-    //     updateUserLiquidationDistances()
-    // }
 }
 
 interface MessageData {
