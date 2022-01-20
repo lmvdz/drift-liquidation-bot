@@ -272,7 +272,7 @@ const startWorker = (workerUUID: string, index: number) => {
         fork(
             "./src/worker.js",
             [workerCount,index,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1)].map(x => x + ""),
-            // { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
+            { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
         )
     )
     const worker = workers.get(workerUUID)
