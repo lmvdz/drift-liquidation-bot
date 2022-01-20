@@ -404,7 +404,7 @@ const processMessage = (data : MessageData) => {
                     }
                     marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
 
-                    user.accountSubscriber.eventEmitter.on('userPositionsAccountUpdate', () => {
+                    user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
                         prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
                         marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
                     })
