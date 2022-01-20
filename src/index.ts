@@ -277,10 +277,14 @@ const startWorker = (workerUUID: string, index: number) => {
     )
     const worker = workers.get(workerUUID)
     // os.setPriority(worker.pid, -20)
-    if (worker.stderr)
-    worker.stderr.on('data', (data : Buffer) => {
-        console.log(data.toString());
-    })
+    // if (worker.stderr)
+    // worker.stderr.on('data', (data : Buffer) => {
+    //     console.log(data.toString());
+    // })
+    // if (worker.stdout)
+    // worker.stdout.on('data', (data: Buffer) => {
+    //     console.log(data.toString());
+    // })
 
     worker.on('close', (code, sig) => {
         worker.kill();
@@ -305,10 +309,7 @@ const startWorker = (workerUUID: string, index: number) => {
             }
         }, 5000)
     })
-    if (worker.stdout)
-    worker.stdout.on('data', (data: Buffer) => {
-        console.log(data.toString());
-    })
+    
 
     worker.on('message', (data : string) => {
         let d = JSON.parse(data);
