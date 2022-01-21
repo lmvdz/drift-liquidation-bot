@@ -373,20 +373,22 @@ const processMessage = (data : MessageData) => {
                     _.genesysgoClearingHouse,
                     new PublicKey(data.programUserAccount.authority)
                 );
-                user.subscribe().then(() => {
+                if (!user.isSubscribed) {
+                    user.subscribe().then(() => {
 
-                    users.set(data.programUserAccount.publicKey, user);
-                    if (user.getUserPositionsAccount().positions.length > 0) {
-                        prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
-                    }
-                    marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
-
-                    user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
-                        prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                        users.set(data.programUserAccount.publicKey, user);
+                        if (user.getUserPositionsAccount().positions.length > 0) {
+                            prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                        }
                         marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
+    
+                        user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
+                            prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                            marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
+                        })
+                        
                     })
-                    
-                })
+                }
             }
         }
     }

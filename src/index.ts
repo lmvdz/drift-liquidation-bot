@@ -54,7 +54,7 @@ const minLiquidationDistance = 2
 const partialLiquidationSlippage = 0.8
 
 // how many workers to check for users will there be
-const workerCount = 1;
+const workerCount = 40;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
