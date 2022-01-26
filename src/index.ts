@@ -278,6 +278,7 @@ const start = Date.now();
 
 let started = 0;
 
+const memusage : Map<string, number> = new Map<string, number>();
 
 
 const startWorker = (workerUUID: string, index: number) => {
@@ -343,6 +344,8 @@ const startWorker = (workerUUID: string, index: number) => {
     worker.on('message', (data : string) => {
         let d = JSON.parse(data);
         switch(d.type) {
+            case 'memusage':
+                memusage.set(workerUUID, d.usedMem);
             case 'tx':
                 const tx = Transaction.from(Buffer.from(d.rawTransaction))
                 tpuConnection.tpuClient.sendRawTransaction(tx.serialize()).then((signature) => {
@@ -468,8 +471,11 @@ const startLiquidationBot = async (workerCount) => {
 
     // check for transactions
     setInterval(() => {
-        const used = process.memoryUsage().heapUsed / 1024 / 1024;
-        console.log(`Currently used ${used} MB`);
+        let used = process.memoryUsage().heapUsed / 1024 / 1024;
+        memusage.forEach(workerMemUsed => {
+            used += workerMemUsed;
+        })
+        console.log(`total mem usage: ${used.toFixed(2)} MB`)
         transactions.forEach((unconfirmedTx) => {
             if (unconfirmedTx.time + (30 * 1000) > Date.now()) {
                 indexConnection.getConfirmedTransaction(unconfirmedTx.tx, 'confirmed').then(tx => {

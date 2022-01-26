@@ -317,7 +317,10 @@ const startWorker = () => {
                     }
                 }
                 // console.log(JSON.stringify(x))
-                if (process.send) process.send( JSON.stringify({ type: 'data', data: x }));
+                if (process.send) {
+                    process.send( JSON.stringify({ type: 'data', data: x }) );
+                    process.send( JSON.stringify({ type: 'memusage', usedMem: process.memoryUsage().heapUsed / 1024 / 1024 }) );
+                }
         
                 intervalCount = 0
                 numUsersChecked = new Array<number>();
