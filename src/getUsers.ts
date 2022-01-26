@@ -7,8 +7,16 @@ import { atob } from "./util/atob.js"
 import fs from 'fs-extra'
 
 import { default as _ } from './clearingHouse.js';
+
+
+import { config } from 'dotenv';
+import { Connection } from '@solana/web3.js';
+config({path: './.env.local'});
+
+
+const clearingHouse = _.createClearingHouse(new Connection(process.env.RPC_URL))
 fs.ensureDirSync('./storage')
-_.genesysgoClearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
+clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<any>[]) => {
     if (fs.pathExistsSync('./storage/programUserAccounts')) {
         const programUserAccounts = fs.readFileSync('./storage/programUserAccounts', 'utf8')
         const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as Array<{ publicKey: string, authority: string}>;
