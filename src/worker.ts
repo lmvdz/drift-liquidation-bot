@@ -1,8 +1,8 @@
 import { default as _ } from './clearingHouse.js'
 
 // solana web3
-import {PublicKey, TransactionResponse } from '@solana/web3.js'
-
+import {Connection, PublicKey, TransactionResponse } from '@solana/web3.js'
+import bs58 from 'bs58';
 // used for drift sdk
 import {
     BN_MAX,
@@ -19,12 +19,11 @@ import {
     ZERO,
     BN
 } from '@drift-labs/sdk';
-import fs from 'fs-extra';
 
 
 
-import { btoa } from "./util/btoa.js"
-import { atob } from "./util/atob.js"
+import { config } from 'dotenv';
+config({path: './.env.local'});
 
 // used to store the data, uses the same api calls as window.localStorage but works with nodejs
 import { Transaction,TransactionInstruction } from '@solana/web3.js';
@@ -76,46 +75,43 @@ const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser
 const preparedLiquidationInstructions : Map<string, TransactionInstruction>= new Map<string, TransactionInstruction>();
 const marginRatios : Map<string, BN> = new Map<string, BN>();
 
+const workerConnection = new Connection(process.env.RPC_URL)
+let clearingHouse : ClearingHouse = null;
+
 const getLiqTransactionProfit = (tx:string) : Promise<number> => {
     return new Promise((resolve, reject) => {
-        _.genesysgoConnection.getTransaction(tx).then((transaction : TransactionResponse) => {
-            let clearingHouseUserPreTokenBalance : number = parseFloat(transaction.meta.preTokenBalances[0].uiTokenAmount.uiAmountString)
-            let clearingHouseUserPostTokenBalance : number = parseFloat(transaction.meta.postTokenBalances[0].uiTokenAmount.uiAmountString)
-            let balanceChange = clearingHouseUserPreTokenBalance - clearingHouseUserPostTokenBalance;
-            resolve(balanceChange)
+        workerConnection.getTransaction(tx).then((transaction : TransactionResponse) => {
+            if (transaction) {
+                if (!transaction.meta.err) {
+                    let clearingHouseUserPreTokenBalance : number = parseFloat(transaction.meta.preTokenBalances[0].uiTokenAmount.uiAmountString)
+                    let clearingHouseUserPostTokenBalance : number = parseFloat(transaction.meta.postTokenBalances[0].uiTokenAmount.uiAmountString)
+                    let balanceChange = clearingHouseUserPreTokenBalance - clearingHouseUserPostTokenBalance;
+                    resolve(balanceChange)
+                } else {
+                    reject(transaction.meta.err)
+                }
+            } else {
+                reject('transaction not found')
+            }
         }).catch(error => {
             reject(error)
         })
     })
-    
 }
 
-
 const liquidate = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<string> => {
-    return new Promise((resolve, reject) => {
-        let instructions = preparedLiquidationInstructions.get(pub.toBase58());
-        if (instructions === undefined) {
-            prepareLiquidationIX(clearingHouse, pub).then(() => {
-                clearingHouse.txSender.send(
-                    wrapInTx(preparedLiquidationInstructions.get(pub.toBase58())),
-                    [],
-                    clearingHouse.opts
-                ).then(tx => {
-                    resolve(tx);
-                }).catch(error => {
-                    reject(error)
-                })
-            })
-                
-        } else {
-            clearingHouse.txSender.send(
-                wrapInTx(preparedLiquidationInstructions.get(pub.toBase58())),
-                [],
-                clearingHouse.opts
-            ).then(tx => resolve(tx)).catch(error => {
-                reject(error)
-            });
+    return new Promise(async (resolve, reject) => {
+        let instruction = preparedLiquidationInstructions.get(pub.toBase58());
+        if (instruction === undefined) {
+            instruction = await prepareLiquidationIX(clearingHouse, pub)
         }
+        let tx = wrapInTx(instruction)
+        tx.recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
+        tx.feePayer = clearingHouse.wallet.publicKey
+        tx = await clearingHouse.wallet.signTransaction(tx)
+        // const txId = await tpuClient.sendRawTransaction(tx.serialize())
+        process.send(JSON.stringify({ type: 'tx', rawTransaction: tx.serialize(), pub: pub.toString() }));
+        resolve(bs58.encode(tx.signature));
     })
     
 }
@@ -124,48 +120,16 @@ const prepareUserLiquidationIX = (clearingHouse: ClearingHouse, user: ClearingHo
     user.getUserAccountPublicKey().then(pub => prepareLiquidationIX(clearingHouse, pub))
 }
 
-const prepareLiquidationIX = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<void> => {
+const prepareLiquidationIX = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<TransactionInstruction> => {
     return new Promise((resolve) => {
         clearingHouse.getLiquidateIx(pub).then( (instruction: TransactionInstruction) => {
             // console.error(instruction)
             preparedLiquidationInstructions.set(pub.toBase58(), instruction);
-            resolve();
+            resolve(instruction);
         })
     })
     
 }
-
-// liquidation helper function
-const liq = (pub: string, marginRatio: BN) : Promise<void> => {
-    return new Promise((resolve, reject) => {
-        liquidate(_.genesysgoClearingHouse, new PublicKey(pub)).then((tx : string) => {
-            getLiqTransactionProfit(tx).then((balanceChange : number) => {
-                let liquidationStorage = []
-                if (fs.pathExistsSync('./storage/liquidations')) {
-                    liquidationStorage = JSON.parse(atob(fs.readFileSync('./storage/liquidations', 'utf8')));
-                }
-                if (!liquidationStorage.some(liquidation => liquidation.tx === tx)) {
-                    liquidationStorage.push({ pub: pub, tx, balanceChange })
-                }
-                
-                
-                fs.writeFileSync('./storage/liquidations', btoa(JSON.stringify(liquidationStorage)))
-                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated user: ${pub} Tx: ${tx} --- +${balanceChange.toFixed(2)} USDC` } ))
-            })
-            resolve()
-        }).catch(error => {
-
-            if (error.message.includes('custom program error: 0x130')) {
-                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Frontrun failed - ${pub} - ${marginRatio.toNumber()}` } ))
-            } else if (error.message.includes('custom program error: 0x1774')) {
-                if (process.send) process.send( JSON.stringify({ type: 'error', data: 'error 0x1774 - recalulating liquidation transaction'}));
-                prepareLiquidationIX(_.genesysgoClearingHouse, new PublicKey(pub))
-            }
-            resolve()
-        });
-    })
-}
-
 // if the margin ratio is less than the liquidation ratio just return 1 to move it to the front of the liquidation distance array
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
@@ -209,7 +173,7 @@ const getMarginRatio = (pub: string) => {
     let totalPositionValue = ZERO, unrealizedPNL = ZERO
 
     positions.forEach(position => {
-        const market = _.genesysgoClearingHouse.getMarket(position.marketIndex);
+        const market = clearingHouse.getMarket(position.marketIndex);
         const baseAssetAmountValue = calculateBaseAssetValue(market, position);
         totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
         unrealizedPNL = unrealizedPNL.add(calculatePositionPNL(market, position, baseAssetAmountValue, true));
@@ -236,7 +200,7 @@ const prioSet : Map<string, NodeJS.Timer> = new Map<string, NodeJS.Timer>();
 const check = (pub : string) => {
     const marginRatio = getMarginRatio(pub)
     if (marginRatio.lte(slipLiq)) {
-        liq(pub, marginRatio)
+        liquidate(clearingHouse, new PublicKey(pub))
         if (process.send) process.send( JSON.stringify({ type: 'out', data: 'liq attempt ' + pub + ' ' + marginRatio.toNumber()/100 }));
     }
     marginRatios.set(pub, marginRatio)
@@ -324,8 +288,8 @@ const startWorker = () => {
     }
     startWorkerTryCount++;
     (async () => {
-        if (!_.genesysgoClearingHouse.isSubscribed) {
-            await _.genesysgoClearingHouse.subscribe()
+        if (!clearingHouse.isSubscribed) {
+            await clearingHouse.subscribe()
             startWorker()
         } else {
             setInterval(() => {
@@ -370,7 +334,7 @@ const processMessage = (data : MessageData) => {
         if (data.programUserAccount !== undefined && data.programUserAccount !== null) {
             if (users.get(data.programUserAccount.publicKey) === undefined || users.get(data.programUserAccount.publicKey) === null) {
                 const user = ClearingHouseUser.from(
-                    _.genesysgoClearingHouse,
+                    clearingHouse,
                     new PublicKey(data.programUserAccount.authority)
                 );
                 if (!user.isSubscribed) {
@@ -378,12 +342,12 @@ const processMessage = (data : MessageData) => {
 
                         users.set(data.programUserAccount.publicKey, user);
                         if (user.getUserPositionsAccount().positions.length > 0) {
-                            prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                            prepareUserLiquidationIX(clearingHouse, user)
                         }
                         marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
     
                         user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
-                            prepareUserLiquidationIX(_.genesysgoClearingHouse, user)
+                            prepareUserLiquidationIX(clearingHouse, user)
                             marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
                         })
                         
@@ -391,19 +355,32 @@ const processMessage = (data : MessageData) => {
                 }
             }
         }
+    } else if (data.dataSource === 'tx') {
+        if (data.transaction.failed) {
+            prepareLiquidationIX(clearingHouse, new PublicKey(data.transaction.pub))
+        } else {
+            getLiqTransactionProfit(data.transaction.signature).then((balanceChange : number) => {
+                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated ${data.transaction.pub} Tx: ${data.transaction.signature} --- +${balanceChange.toFixed(2)} USDC` } ))
+            })
+        }
+        
     }
 }
 
 interface MessageData {
     dataSource: string,
     programUserAccount: {publicKey: string, authority: string}
+    transaction: { signature: string, failed: boolean, pub: string }
 }
 
 process.on('message', (data : MessageData) => {
     // console.error(data);
     processMessage(data)
-})
+});
 
+
+clearingHouse = _.createClearingHouse(workerConnection)
 startWorker()
+
 
 if (process.send) process.send( JSON.stringify({type: 'started' }));

@@ -1,10 +1,10 @@
 // used to get environment variables
 import { Wallet, initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient, BN } from '@drift-labs/sdk';
 import { Keypair, Connection, PublicKey } from '@solana/web3.js';
-import { config } from 'dotenv';
+
 import { from_b58 } from './util/base56.js';
 
-
+import { config } from 'dotenv';
 config({path: './.env.local'});
 
 const botKeyEnvVariable = "BOT_KEY"
@@ -40,16 +40,20 @@ const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
 
 //setup solana rpc connection
 // the one provided is the best one as it allows for unlimited TPS
-const genesysgoConnection = new Connection("https://ssc-dao.genesysgo.net/");
+// const genesysgoConnection = new Connection(process.env.RPC_URL);
+// const genesysgoConnection = new Connection("https://free.rpcpool.com");
 
 
-
-const genesysgoClearingHouse = ClearingHouse.from(
-    genesysgoConnection,
-    botWallet,
-    new PublicKey(
-        sdkConfig.CLEARING_HOUSE_PROGRAM_ID
+const createClearingHouse = (connection : Connection ) : ClearingHouse => {
+    return ClearingHouse.from(
+        connection,
+        botWallet,
+        new PublicKey(
+            sdkConfig.CLEARING_HOUSE_PROGRAM_ID
+        )
     )
-)
+}
 
-export default { genesysgoClearingHouse, genesysgoConnection }
+
+
+export default { createClearingHouse }

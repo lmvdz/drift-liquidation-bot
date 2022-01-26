@@ -1,7 +1,7 @@
 import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
 import fs from 'fs-extra'
-
+import bs58 from 'bs58'
 // const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
 // spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
@@ -21,6 +21,18 @@ import {
 import { 
     Markets, 
 } from '@drift-labs/sdk';
+import { TpuConnection } from './tpuClient.js';
+import { Connection, Transaction } from '@solana/web3.js';
+
+
+import { config } from 'dotenv';
+config({path: './.env.local'});
+
+
+const indexConnection = new Connection(process.env.RPC_URL)
+const clearingHouse = _.createClearingHouse(indexConnection);
+let tpuConnection : TpuConnection = null;
+
 
 // import { BN, calculateEstimatedFundingRate, PythClient } from '@drift-labs/sdk';
 // import { getPythProgramKeyForCluster, PythConnection } from '@pythnetwork/client';
@@ -47,14 +59,14 @@ const checkUsersEveryMS = 5
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = 2
+const minLiquidationDistance = 2 // *** currently unused by the workers, just checks all of the users. ***
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0.8
+const partialLiquidationSlippage = 0
 
 // how many workers to check for users will there be
-const workerCount = 40;
+const workerCount = 70;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -118,7 +130,7 @@ const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array
 
 const getFunding = () => {
     let fundingTable = [];
-    const funding = _.genesysgoClearingHouse.getFundingRateHistoryAccount().fundingRateRecords
+    const funding = clearingHouse.getFundingRateHistoryAccount().fundingRateRecords
     funding.map(record => {
         return {
             marketId: record.marketIndex.toNumber(),
@@ -155,10 +167,10 @@ const getFunding = () => {
 
 // used to print out the tables and chart to console
 const print = async () => {
-    if (!_.genesysgoClearingHouse.isSubscribed)
-        await _.genesysgoClearingHouse.subscribe(['liquidationHistoryAccount'])
-    const userAccount = await _.genesysgoClearingHouse.getUserAccountPublicKey()
-    const liquidatorMap = await updateLiquidatorMap(mapHistoryAccountToLiquidationsArray(_.genesysgoClearingHouse.getLiquidationHistoryAccount()))
+    if (!clearingHouse.isSubscribed)
+        await clearingHouse.subscribe(['liquidationHistoryAccount'])
+    const userAccount = await clearingHouse.getUserAccountPublicKey()
+    const liquidatorMap = await updateLiquidatorMap(mapHistoryAccountToLiquidationsArray(clearingHouse.getLiquidationHistoryAccount()))
     const liquidationChart = getLiquidationChart(liquidatorMap, [userAccount.toBase58()])
     const liquidationTables = getLiquidatorProfitTables(liquidatorMap, [userAccount.toBase58()])
     console.clear();
@@ -166,8 +178,8 @@ const print = async () => {
     //     return parseInt(b[1]) - parseInt(a[1]);
     // }).slice(0, 10).map(([pub, val]) => {
     //     return new Promise((resolve) => {
-    //         _.genesysgoClearingHouse.program.account.user.fetch(new PublicKey(pub)).then((userAccount) => {
-    //             _.genesysgoClearingHouse.program.account.userPositions.fetch((userAccount as UserAccount).positions).then(userPositionsAccount => {
+    //         clearingHouse.program.account.user.fetch(new PublicKey(pub)).then((userAccount) => {
+    //             clearingHouse.program.account.userPositions.fetch((userAccount as UserAccount).positions).then(userPositionsAccount => {
     //                resolve(
     //                    { 
     //                        pub,
@@ -176,7 +188,7 @@ const print = async () => {
     //                             marketIndex: p.marketIndex.toNumber(),
     //                             baseAssetAmount: convertBaseAssetAmountToNumber(p.baseAssetAmount),
     //                             qouteAssetAmount: convertToNumber(p.quoteAssetAmount, QUOTE_PRECISION),
-    //                             baseAssetValue: convertToNumber(calculateBaseAssetValue(_.genesysgoClearingHouse.getMarket(p.marketIndex.toNumber()), p), QUOTE_PRECISION),
+    //                             baseAssetValue: convertToNumber(calculateBaseAssetValue(clearingHouse.getMarket(p.marketIndex.toNumber()), p), QUOTE_PRECISION),
     //                             entryPrice: 0,
     //                             profit: 0
     //                         };
@@ -218,7 +230,7 @@ const print = async () => {
                 "Worker": workerCount,
                 "Users Within Range": x["Users Within Range"],
                 "User Count": x["User Count"],
-                "Average Times Checked": parseInt(x["Times Checked"] + "") / workerCount,
+                "Average Times Checked": (parseInt(x["Times Checked"] + "") / workerCount).toFixed(0),
                 "Average Worker MS": (x["Total MS"] / workerCount).toFixed(2),
                 "Average Worker Check MS": ((x["Total MS"] / workerCount) / (x["Times Checked"] / workerCount)).toFixed(2),
                 "Average User Check MS": ( x["User Check MS"] / workerCount).toFixed(6),
@@ -267,6 +279,7 @@ const start = Date.now();
 let started = 0;
 
 
+
 const startWorker = (workerUUID: string, index: number) => {
     workers.set(workerUUID, 
         fork(
@@ -277,17 +290,33 @@ const startWorker = (workerUUID: string, index: number) => {
     )
     const worker = workers.get(workerUUID)
     // os.setPriority(worker.pid, -20)
-    // if (worker.stderr)
-    // worker.stderr.on('data', (data : Buffer) => {
-    //     console.log(data.toString());
-    // })
-    // if (worker.stdout)
-    // worker.stdout.on('data', (data: Buffer) => {
-    //     console.log(data.toString());
-    // })
+    if (worker.stderr)
+    worker.stderr.on('data', (data : Buffer) => {
+        console.log(data.toString());
+    })
+    if (worker.stdout)
+    worker.stdout.on('data', (data: Buffer) => {
+        console.log(data.toString());
+    })
+
+    
+    worker.on('uncaughtException', (error) => {
+        if (!worker.connected && error.code === 'ERR_IPC_CHANNEL_CLOSED') {
+            worker.kill();
+            return;
+        }
+        console.error(error);
+    });
+
+    worker.on('unhandledRejection', (error) => {
+        if (!worker.connected && error.code === 'ERR_IPC_CHANNEL_CLOSED') {
+            worker.kill();
+            return;
+        }
+        console.error(error);
+    });
 
     worker.on('close', (code, sig) => {
-        worker.kill();
         workers.delete(workerUUID)
         startWorker(workerUUID, index);
         console.log('worked died, restarting!')
@@ -314,6 +343,25 @@ const startWorker = (workerUUID: string, index: number) => {
     worker.on('message', (data : string) => {
         let d = JSON.parse(data);
         switch(d.type) {
+            case 'tx':
+                const tx = Transaction.from(Buffer.from(d.rawTransaction))
+                tpuConnection.tpuClient.sendRawTransaction(tx.serialize()).then((signature) => {
+                    transactions.add({ 
+                        pub: d.pub,
+                        time: Date.now(),
+                        worker: workerUUID,
+                        tx: signature
+                    } as UnconfirmedTx)
+                    // worker.send({ dataSource: 'tx', transaction: { signature, failed: false, pub: d.pub } })
+                }).catch(error => {
+                    transactions.add({ 
+                        pub: d.pub,
+                        time: Date.now(),
+                        worker: workerUUID,
+                        tx: bs58.encode(tx.signature)
+                    } as UnconfirmedTx)
+                    // worker.send({ dataSource: 'tx', transaction: { signature: bs58.encode(tx.signature), failed: true, pub: d.pub } })
+                })
             case 'started':
                 if (started < workerCount) {
                     started++
@@ -381,6 +429,14 @@ const startWorker = (workerUUID: string, index: number) => {
     })
 }
 
+interface UnconfirmedTx {
+    pub: string,
+    time: number,
+    worker: string,
+    tx: string
+}
+
+const transactions : Set<UnconfirmedTx> = new Set<UnconfirmedTx>();
 
 // starts each worker and handles the information being sent back
 const startWorkers = (workerCount) : Promise<void> => {
@@ -397,22 +453,39 @@ const startWorkers = (workerCount) : Promise<void> => {
 // start the workers
 // subscribe the users
 // start the get new users loop
-const startLiquidationBot = (workerCount) => {
 
-_.genesysgoClearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"]).then(() => {
+const startLiquidationBot = async (workerCount) => {
+    tpuConnection = await TpuConnection.load(process.env.RPC_URL);
+    const subscribed = await clearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"])
+    if (subscribed) startWorkers(workerCount);
     
-// _.genesysgoClearingHouse.setPollingRate('liquidationHistoryAccount', 10000);
-// const startedPolling = _.genesysgoClearingHouse.startPolling('liquidationHistoryAccount');
+    // restart workers every hour...
+    setInterval(() => {
+        workers.forEach(worker => {
+            worker.kill();
+        })
+    }, 1000 * 60 * 60)
 
-// _.genesysgoClearingHouse.accountSubscriber.eventEmitter.on('fetchedAccount', (accountType) => {
-//     console.log('fetched account ' + accountType);
-//     const stopPolling = _.genesysgoClearingHouse.stopPolling('liquidationHistoryAccount');
-// })
-    
-    
-    startWorkers(workerCount);
-})
-
+    // check for transactions
+    setInterval(() => {
+        const used = process.memoryUsage().heapUsed / 1024 / 1024;
+        console.log(`Currently used ${used} MB`);
+        transactions.forEach((unconfirmedTx) => {
+            if (unconfirmedTx.time + (30 * 1000) > Date.now()) {
+                indexConnection.getConfirmedTransaction(unconfirmedTx.tx, 'confirmed').then(tx => {
+                    const worker = workers.get(unconfirmedTx.worker);
+                    if (tx) {
+                        if (tx.meta.err) {
+                            worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: true, pub: unconfirmedTx.pub } })
+                        } else {
+                            worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: false, pub: unconfirmedTx.pub } })
+                        }
+                    }
+                    transactions.delete(unconfirmedTx);
+                })
+            }
+        })
+    }, 30 * 1000)
 }
 
 startLiquidationBot(workerCount)
