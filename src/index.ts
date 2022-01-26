@@ -346,6 +346,7 @@ const startWorker = (workerUUID: string, index: number) => {
         switch(d.type) {
             case 'memusage':
                 memusage.set(workerUUID, d.usedMem);
+                break;
             case 'tx':
                 const tx = Transaction.from(Buffer.from(d.rawTransaction))
                 tpuConnection.tpuClient.sendRawTransaction(tx.serialize()).then((signature) => {
@@ -365,6 +366,7 @@ const startWorker = (workerUUID: string, index: number) => {
                     } as UnconfirmedTx)
                     // worker.send({ dataSource: 'tx', transaction: { signature: bs58.encode(tx.signature), failed: true, pub: d.pub } })
                 })
+                break;
             case 'started':
                 if (started < workerCount) {
                     started++
