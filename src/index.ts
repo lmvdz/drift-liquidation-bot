@@ -22,14 +22,14 @@ import {
     Markets, 
 } from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
-import { Connection, Transaction } from '@solana/web3.js';
+import { Connection, ConnectionConfig, Transaction } from '@solana/web3.js';
 
 
 import { config } from 'dotenv';
 config({path: './.env.local'});
 
 
-const indexConnection = new Connection(process.env.RPC_URL)
+const indexConnection = new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig)
 const clearingHouse = _.createClearingHouse(indexConnection);
 let tpuConnection : TpuConnection = null;
 
@@ -40,7 +40,7 @@ let tpuConnection : TpuConnection = null;
 // CONFIG THE BOT
 
 // how many minutes before users will be fetched from on chain ( get new users )
-const userUpdateTimeInMinutes = 60
+const userUpdateTimeInMinutes = 10
 
 // how many minutes is considered one loop for the worker
 const workerLoopTimeInMinutes = 1
@@ -48,8 +48,10 @@ const workerLoopTimeInMinutes = 1
 // update all margin ratios every x minutes
 const updateAllMarginRatiosInMinutes = 1
 
-// users will be checked every x seconds
-const checkUsersEveryMS = 5
+const highPrioCheckUsersEveryMS = 5
+const mediumPrioCheckUsersEveryMS = 1000
+const lowPrioCheckUsersEveryMS = 5 * 1000
+ 
 
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
@@ -63,10 +65,13 @@ const minLiquidationDistance = 2 // *** currently unused by the workers, just ch
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0
+const partialLiquidationSlippage = 0.05
+
+const highPriorityMarginRatio = 650
+const mediumPriorityMarginRatio = 1000
 
 // how many workers to check for users will there be
-const workerCount = 70;
+const workerCount = 20;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -168,7 +173,7 @@ const getFunding = () => {
 // used to print out the tables and chart to console
 const print = async () => {
     if (!clearingHouse.isSubscribed)
-        await clearingHouse.subscribe(['liquidationHistoryAccount'])
+        await clearingHouse.subscribe(['liquidationHistoryAccount', "fundingRateHistoryAccount"])
     const userAccount = await clearingHouse.getUserAccountPublicKey()
     const liquidatorMap = await updateLiquidatorMap(mapHistoryAccountToLiquidationsArray(clearingHouse.getLiquidationHistoryAccount()))
     const liquidationChart = getLiquidationChart(liquidatorMap, [userAccount.toBase58()])
@@ -208,8 +213,10 @@ const print = async () => {
         ([[...workerData].map(([wrkr, mapData]) => {
             let dataFromMap = JSON.parse(mapData)
             let r =  {
-                "Users Within Range": parseFloat(dataFromMap.margin.length),
                 "User Count": parseFloat(dataFromMap.userCount),
+                "High Prio": parseInt(dataFromMap.prio.high),
+                "Medium Prio": parseInt(dataFromMap.prio.medium),
+                "Low Prio": parseInt(dataFromMap.prio.low),
                 "Times Checked": parseFloat(dataFromMap.intervalCount),
                 "Total MS": parseFloat(dataFromMap.time.total),
                 "User Check MS": dataFromMap.time.total / (dataFromMap.intervalCount *  (dataFromMap.userCount)),
@@ -218,7 +225,9 @@ const print = async () => {
             return r
         }).reduce((a, b) => {
             return {
-                "Users Within Range": a["Users Within Range"] + b["Users Within Range"],
+                "High Prio": a["High Prio"] + b["High Prio"],
+                "Medium Prio": a["Medium Prio"] + b["Medium Prio"],
+                "Low Prio": a["Low Prio"] + b["Low Prio"],
                 "User Count": a["User Count"]+ b["User Count"],
                 "Times Checked": a["Times Checked"] + b["Times Checked"],
                 "Total MS": a["Total MS"] + b["Total MS"],
@@ -228,7 +237,9 @@ const print = async () => {
         })].map(x => {
             return {
                 "Worker": workerCount,
-                "Users Within Range": x["Users Within Range"],
+                "High Prio": x["High Prio"],
+                "Medium Prio": x["Medium Prio"] ,
+                "Low Prio": x["Low Prio"],
                 "User Count": x["User Count"],
                 "Average Times Checked": (parseInt(x["Times Checked"] + "") / workerCount).toFixed(0),
                 "Average Worker MS": (x["Total MS"] / workerCount).toFixed(2),
@@ -280,26 +291,60 @@ let started = 0;
 
 const memusage : Map<string, number> = new Map<string, number>();
 
+const isWin = process.platform === "win32"
+
+interface WorkerStatus {
+    started: boolean,
+    restarted: boolean,
+    restarting: boolean,
+    alive: boolean,
+    lastCheckTs: number
+}
+
+const workerStatus : Map<string, WorkerStatus> = new Map<string, WorkerStatus>();
 
 const startWorker = (workerUUID: string, index: number) => {
     workers.set(workerUUID, 
         fork(
             "./src/worker.js",
-            [workerCount,index,workerUUID,workerLoopTimeInMinutes,updateAllMarginRatiosInMinutes,checkUsersEveryMS,minLiquidationDistance,partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1)].map(x => x + ""),
-            { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
+            [
+                workerCount,
+                index,
+                workerUUID,
+                workerLoopTimeInMinutes,
+                updateAllMarginRatiosInMinutes,
+                highPrioCheckUsersEveryMS,
+                mediumPrioCheckUsersEveryMS,
+                lowPrioCheckUsersEveryMS,
+                minLiquidationDistance,
+                partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1),
+                highPriorityMarginRatio,
+                mediumPriorityMarginRatio
+            ].map(x => x + ""),
+            // { stdio: [ 'pipe', 'pipe', 'pipe', 'ipc' ] }
         )
     )
     const worker = workers.get(workerUUID)
     // os.setPriority(worker.pid, -20)
+
     if (worker.stderr)
     worker.stderr.on('data', (data : Buffer) => {
         console.log(data.toString());
     })
+    
     if (worker.stdout)
     worker.stdout.on('data', (data: Buffer) => {
         console.log(data.toString());
     })
 
+    worker.on('data', () => {
+        if (worker.stderr) {
+            worker.stderr.read();
+        }
+        if (worker.stdout) {
+            worker.stdout.read();
+        }
+    })
     
     worker.on('uncaughtException', (error) => {
         if (!worker.connected && error.code === 'ERR_IPC_CHANNEL_CLOSED') {
@@ -318,31 +363,22 @@ const startWorker = (workerUUID: string, index: number) => {
     });
 
     worker.on('close', (code, sig) => {
+        worker.kill()
         workers.delete(workerUUID)
         startWorker(workerUUID, index);
+        workerStatus.set(workerUUID, { started: false, alive: false, restarting: true, restarted: false, lastCheckTs: Date.now() })
         console.log('worked died, restarting!')
-        setTimeout(() => {
-            console.log('sending users to restarted worker')
-            let newWorker = workers.get(workerUUID);
-            if (splitUsersBetweenWorkers) {
-                workerAssignment.forEach((value, key) => {
-                    if (workerUUID === value.worker) {
-                        newWorker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority}})
-                    }
-                })
-            } else {
-                let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>
-                parsedUsers.forEach(user => {
-                    newWorker.send({dataSource: 'user', programUserAccount: user})
-                })
-            }
-        }, 5000)
     })
-    
 
     worker.on('message', (data : string) => {
         let d = JSON.parse(data);
+
+        if (workerStatus.has(workerUUID)) {
+            workerStatus.set(workerUUID, { ...workerStatus.get(workerUUID), alive: true, lastCheckTs: Date.now() });
+        } else {
+            workerStatus.set(workerUUID, { started: false, restarted: false, restarting: false, alive: true, lastCheckTs: Date.now() });
+        }
+       
         switch(d.type) {
             case 'memusage':
                 memusage.set(workerUUID, d.usedMem);
@@ -368,18 +404,35 @@ const startWorker = (workerUUID: string, index: number) => {
                 })
                 break;
             case 'started':
-                if (started < workerCount) {
+                if (workerStatus.get(workerUUID).restarting) {
+                    console.log('sending users to restarted worker ' + workerUUID)
+                    let newWorker = workers.get(workerUUID);
+                    if (splitUsersBetweenWorkers) {
+                        workerAssignment.forEach((value, key) => {
+                            if (workerUUID === value.worker) {
+                                newWorker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority }})
+                            }
+                        })
+                    } else {
+                        let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
+                        let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>
+                        parsedUsers.forEach(user => {
+                            newWorker.send({dataSource: 'user', programUserAccount: user})
+                        })
+                    }
+                    workerStatus.set(workerUUID, { ...workerStatus.get(workerUUID), restarted: true, restarting: false });
+                } else if (started < workerCount) {
+                    workerStatus.set(workerUUID, { ...workerStatus.get(workerUUID), alive: true, started: true  });
                     started++
-                    console.log(started);
                     if (started === workerCount) {
                         console.clear();
                         if (fs.pathExistsSync('./storage/programUserAccounts')) {
                             let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
                             loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
+                            getNewUsers();
                         } else {
                             getNewUsers();
                         }
-
                         setTimeout(() => {
                             getNewUsers();
                         }, 60 * 1000 * userUpdateTimeInMinutes)
@@ -418,19 +471,40 @@ const startWorker = (workerUUID: string, index: number) => {
                 }
                 break;
             case 'out':
-                if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
-                    fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
+                if (isWin) {
+                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out')) {
+                        fs.writeFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', '')
+                    }
+                    fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
+                } else {
+                    if (!fs.existsSync(process.cwd() + '/src/logs/worker-'+start+'.out')) {
+                        fs.writeFileSync(process.cwd() + '/src/logs/worker-'+start+'.out', '')
+                    }
+                    fs.appendFileSync(process.cwd() + '/src/logs/worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
                 }
-                fs.appendFileSync(process.cwd() + '\\src\\logs\\worker-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
+                
                 break;
             case 'error':
-                if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
-                    fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
+                if (isWin) {
+                    if (!fs.existsSync(process.cwd() + '\\src\\logs\\err-'+start+'.out')) {
+                        fs.writeFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', '')
+                    }
+                    fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
+                    
+                } else {
+                    if (!fs.existsSync(process.cwd() + '/src/logs/err-'+start+'.out')) {
+                        fs.writeFileSync(process.cwd() + '/src/logs/err-'+start+'.out', '')
+                    }
+                    fs.appendFileSync(process.cwd() + '/src/logs/err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
                 }
-                fs.appendFileSync(process.cwd() + '\\src\\logs\\err-'+start+'.out', new Date() + ' ' + workerUUID + " " + d.data + '\n')
                 break;
         }
-
+        setInterval(() => {
+            // kill the worker if the last time it was checked was greater than 5 minutes
+            if (workerStatus.get(workerUUID).lastCheckTs < Date.now() - 1000 * 60 * 5) {
+                worker.kill();
+            }
+        }, 1000 * 60)
     })
 }
 
@@ -460,8 +534,9 @@ const startWorkers = (workerCount) : Promise<void> => {
 // start the get new users loop
 
 const startLiquidationBot = async (workerCount) => {
-    tpuConnection = await TpuConnection.load(process.env.RPC_URL);
+    tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
     const subscribed = await clearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"])
+    
     if (subscribed) startWorkers(workerCount);
     
     // restart workers every hour...

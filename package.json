@@ -8,7 +8,7 @@
   ],
   "type": "module",
   "scripts": {
-    "rebuild": "cd protocol-v1/sdk && npm run build-win && cd ../../ && npm update",
+    "rebuild": "cd protocol-v1/sdk && yarn && yarn build-win && cd ../../ && yarn upgrade",
     "start": "node  --loader ts-node/esm ./src/index.ts",
     "liqHistory": "node --no-warnings --loader ts-node/esm ./src/liqHistoryVisualizer.ts",
     "tpuTest": "node  --loader ts-node/esm ./src/testTpuClient.ts"
@@ -19,7 +19,7 @@
   },
   "license": "ISC",
   "dependencies": {
-    "@drift-labs/sdk": "^0.1.16",
+    "@drift-labs/sdk": "file:protocol-v1/sdk",
     "@project-serum/anchor": "^0.20.1",
     "@pythnetwork/client": "^2.5.1",
     "@solana/web3.js": "^1.31.0",

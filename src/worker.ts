@@ -1,7 +1,7 @@
 import { default as _ } from './clearingHouse.js'
 
 // solana web3
-import {Connection, PublicKey, TransactionResponse } from '@solana/web3.js'
+import {Connection, ConnectionConfig, PublicKey, TransactionResponse } from '@solana/web3.js'
 import bs58 from 'bs58';
 // used for drift sdk
 import {
@@ -9,7 +9,6 @@ import {
     calculateBaseAssetValue,
     calculatePositionFundingPNL,
     ClearingHouse,
-    ClearingHouseUser,
     Market,
     PARTIAL_LIQUIDATION_RATIO,
     PRICE_TO_QUOTE_PRECISION,
@@ -17,7 +16,10 @@ import {
     UserAccount,
     UserPosition,
     ZERO,
-    BN
+    BN,
+    PollingAccountSubscriber,
+    UserPositionsAccount,
+    getUserAccountPublicKey
 } from '@drift-labs/sdk';
 
 
@@ -48,8 +50,12 @@ const workerLoopTimeInMinutes = parseFloat(args[3])
 // update the liquidation distance of all users every X minutes, must be lower than the liquidationLoopTimeInMinutes otherwise won't be called
 const updateAllMarginRatiosInMinutes = parseFloat(args[4])
 
-// check users for liquidation every X milliseconds
-const checkUsersEveryMS = parseFloat(args[5])
+// check high/medium/low priority users for liquidation every X milliseconds
+const highPrioCheckUsersEveryMS = parseFloat(args[5])
+
+const mediumPrioCheckUsersEveryMS = parseFloat(args[6])
+
+const lowPrioCheckUsersEveryMS = parseFloat(args[7])
 
 // only check users who's liquidation distance is less than X
 // liquidation distance is calculated using the calcDistanceToLiq function
@@ -59,23 +65,36 @@ const checkUsersEveryMS = parseFloat(args[5])
 // a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
 // 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
 // adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = parseFloat(args[6]); // currently not used, all users are checked each call!
+const minLiquidationDistance = parseFloat(args[8]); // currently not used, all users are checked each call!
 
 // the slippage of partial liquidation as a percentage
-const partialLiquidationSlippage = parseFloat(args[7])
+const partialLiquidationSlippage = parseFloat(args[9])
+
+// the margin ratio to consider high prio
+const highPriorityMarginRatio = parseFloat(args[10])
+
+// the margin ratio to consider medium prio
+const mediumPriorityMarginRatio = parseFloat(args[11])
 
 
 interface User {
-    account: UserAccount,
-    positions: Array<UserPosition>,
-    eventListeners: Array<EventListener>
+    publicKey: string,
+    authority: string,
+    accountPublicKey: string,
+    accountData: UserAccount,
+    positionsPublicKey: string,
+    positionsAccountData: UserPositionsAccount,
+    liquidationInstruction: TransactionInstruction,
+    marginRatio: BN,
+    prio: Priority
 }
 
-const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
-const preparedLiquidationInstructions : Map<string, TransactionInstruction>= new Map<string, TransactionInstruction>();
-const marginRatios : Map<string, BN> = new Map<string, BN>();
+// const users : Map<string, ClearingHouseUser> = new Map<string, ClearingHouseUser>();
+// const userKeys : Map<string, User> = new Map<string, User>();
+// const preparedLiquidationInstructions : Map<string, TransactionInstruction>= new Map<string, TransactionInstruction>();
+// const marginRatios : Map<string, BN> = new Map<string, BN>();
 
-const workerConnection = new Connection(process.env.RPC_URL)
+const workerConnection = new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 1000 * 60 } as ConnectionConfig)
 let clearingHouse : ClearingHouse = null;
 
 const getLiqTransactionProfit = (tx:string) : Promise<number> => {
@@ -99,32 +118,33 @@ const getLiqTransactionProfit = (tx:string) : Promise<number> => {
     })
 }
 
-const liquidate = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<string> => {
+const liquidate = (user: User) : Promise<string> => {
     return new Promise(async (resolve, reject) => {
-        let instruction = preparedLiquidationInstructions.get(pub.toBase58());
+        let instruction = user.liquidationInstruction
         if (instruction === undefined) {
-            instruction = await prepareLiquidationIX(clearingHouse, pub)
+            instruction = await prepareUserLiquidationIX(user)
         }
         let tx = wrapInTx(instruction)
         tx.recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
         tx.feePayer = clearingHouse.wallet.publicKey
         tx = await clearingHouse.wallet.signTransaction(tx)
-        // const txId = await tpuClient.sendRawTransaction(tx.serialize())
-        process.send(JSON.stringify({ type: 'tx', rawTransaction: tx.serialize(), pub: pub.toString() }));
+        process.send(JSON.stringify({ type: 'tx', rawTransaction: tx.serialize(), pub: user.publicKey }));
         resolve(bs58.encode(tx.signature));
     })
     
 }
 
-const prepareUserLiquidationIX = (clearingHouse: ClearingHouse, user: ClearingHouseUser) => {
-    user.getUserAccountPublicKey().then(pub => prepareLiquidationIX(clearingHouse, pub))
+const prepareUserLiquidationIX = async (user: User) : Promise<TransactionInstruction> => {
+    const userAccountPub = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
+    const liquidationInstruction = await prepareLiquidationIX(user.publicKey, userAccountPub);
+    return liquidationInstruction;
 }
 
-const prepareLiquidationIX = (clearingHouse: ClearingHouse, pub : PublicKey) : Promise<TransactionInstruction> => {
+const prepareLiquidationIX = (userPub: string, userAccountPub : PublicKey) : Promise<TransactionInstruction> => {
     return new Promise((resolve) => {
-        clearingHouse.getLiquidateIx(pub).then( (instruction: TransactionInstruction) => {
+        clearingHouse.getLiquidateIx(userAccountPub).then( (instruction: TransactionInstruction) => {
             // console.error(instruction)
-            preparedLiquidationInstructions.set(pub.toBase58(), instruction);
+            userMap.set(userPub, { ...userMap.get(userPub), liquidationInstruction: instruction });
             resolve(instruction);
         })
     })
@@ -162,9 +182,8 @@ const calculatePositionPNL = (
 
 const unrealizedPnLMap : Map<string, string> = new Map<string, string>();
 
-const getMarginRatio = (pub: string) => {
-    const user = users.get(pub)
-    const positions = user.getUserPositionsAccount().positions;
+const getMarginRatio = (user: User) => {
+    const positions = user.positionsAccountData.positions;
 
     if (positions.length === 0) {
         return BN_MAX;
@@ -179,102 +198,36 @@ const getMarginRatio = (pub: string) => {
         unrealizedPNL = unrealizedPNL.add(calculatePositionPNL(market, position, baseAssetAmountValue, true));
     })
 
-    unrealizedPnLMap.set(pub, unrealizedPNL.toString());
+    // unrealizedPnLMap.set(pub, unrealizedPNL.toString());
 
     if (totalPositionValue.eq(ZERO)) {
         return BN_MAX;
     }
 
     return (
-        user.getUserAccount().collateral.add(unrealizedPNL) ??
+        user.accountData.collateral.add(unrealizedPNL) ??
         ZERO
     ).mul(TEN_THOUSAND).div(totalPositionValue);
 }
 
 
-
-
-
-const prioSet : Map<string, NodeJS.Timer> = new Map<string, NodeJS.Timer>();
-
-const check = (pub : string) => {
-    const marginRatio = getMarginRatio(pub)
-    if (marginRatio.lte(slipLiq)) {
-        liquidate(clearingHouse, new PublicKey(pub))
-        if (process.send) process.send( JSON.stringify({ type: 'out', data: 'liq attempt ' + pub + ' ' + marginRatio.toNumber()/100 }));
-    }
-    marginRatios.set(pub, marginRatio)
+const checkForLiquidation = (pub : string) => {    
+    const user = userMap.get(pub)
+    user.marginRatio = getMarginRatio(user);
+    if (user.marginRatio.lte(slipLiq))
+        liquidate(user);
 }
 
-const checkUser = (pub : string) : Promise<{pub: string, marginRatio: BN, closeToLiquidation: boolean}> => {
-    return new Promise((resolve) => {
-        const marginRatio = getMarginRatio(pub)
-        const closeToLiquidation = marginRatio.lte(slipLiq)
-        if (closeToLiquidation) {
-            if (process.send) process.send( JSON.stringify({ type: 'out', data: pub + ' close to liq ' + marginRatio.toNumber()/100 }));
-            if (!prioSet.has(pub)) {
-                prioSet.set(pub, setInterval(() => {
-                    check(pub)
-                }));
-            } else if (!closeToLiquidation) {
-                clearInterval(prioSet.get(pub))
-                prioSet.delete(pub)
-            }
-        }
-        marginRatios.set(pub, marginRatio)
-        resolve({pub, marginRatio, closeToLiquidation})
-    })
-    
-}
-
-const mapFilteredToLiquidationCheck = () : Array<Promise<{pub: string, marginRatio: BN, closeToLiquidation: boolean}>> => {
-    return [...marginRatios].map(([publicKey,]) : Promise<{pub: string, marginRatio: BN, closeToLiquidation: boolean}> => { 
-        return new Promise((innerResolve) => {
-            checkUser(publicKey).then(({ pub, marginRatio, closeToLiquidation}) => innerResolve({ pub, marginRatio, closeToLiquidation}))
-        })
-    })
+const checkBucket = (bucket: PollingAccountSubscriber) => {
+    const start = process.hrtime();
+    const keys = bucket.getAllKeys();
+    keys.forEach(async key => checkForLiquidation(key))
+    numUsersChecked.push(keys.length)
+    const time = process.hrtime(start);
+    checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
 }
 
 let marginRatioMap : Map<string, number> = new Map<string, number>();
-
-// based on liquidation distance check users for liquidation
-const checkUsersForLiquidation = () : Promise<{ numOfUsersChecked: number, time: [number, number] }> => {
-    return new Promise(resolve => {
-        var hrstart = process.hrtime();
-        const filtered = mapFilteredToLiquidationCheck()
-        Promise.all(filtered).then((promises) => {
-            promises.forEach(p => {
-                if (p.closeToLiquidation) {
-                    marginRatioMap.set(p.pub, p.marginRatio.toNumber())
-                } else {
-                    marginRatioMap.delete(p.pub)
-                }
-            })
-            resolve({numOfUsersChecked: filtered.length, time: process.hrtime(hrstart) })
-        })
-    })
-}
-
-
-const updateAllMarginRatios = () : Promise<[number, number]> => {
-    return new Promise((resolve) => {
-        var hrstart = process.hrtime();
-        Promise.all([...users.keys()].map((publicKey) : Promise<void> => new Promise(resolveInner => {
-            let mr = getMarginRatio(publicKey);
-            if (mr.lte(slipLiq)) {
-                marginRatioMap.set(publicKey, mr.toNumber())
-            } else if (marginRatioMap.has(publicKey)) {
-                marginRatioMap.delete(publicKey)
-            }
-            marginRatios.set(publicKey, mr)
-            resolveInner();
-        }))).then(() => {
-            resolve(process.hrtime(hrstart));
-        })
-    })
-    
-}
-
 
 // prepare variables for liquidation loop
 let intervalCount = 0
@@ -283,91 +236,194 @@ let checkTime = new Array<number>();
 let startWorkerTryCount = 0;
 // liquidation bot, where the magic happens
 const startWorker = () => {
-    if (startWorkerTryCount > 10) {
-        process.exit();
-    }
-    startWorkerTryCount++;
-    (async () => {
-        if (!clearingHouse.isSubscribed) {
-            await clearingHouse.subscribe()
-            startWorker()
-        } else {
-            setInterval(() => {
-                updateAllMarginRatios()
-            }, (60 * 1000 * updateAllMarginRatiosInMinutes))
-            setInterval(() => {
-                checkUsersForLiquidation().then(({ numOfUsersChecked, time }) => {
-                    intervalCount++
-                    // console.log(intervalCount, numOfUsersChecked)
-                    numUsersChecked.push(Number(numOfUsersChecked))
-                    checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
-                })
-            }, checkUsersEveryMS)
-            setInterval(() => {
-                const x = {
-                    ts: Date.now(),
-                    worker: uuid,
-                    data: {
-                        userCount: users.size,
-                        intervalCount: intervalCount,
-                        checked: numUsersChecked,
-                        margin: [...marginRatioMap.values()],
-                        time: checkTime,
-                        unrealizedPnLMap: JSON.stringify([...unrealizedPnLMap])
-                    }
-                }
-                // console.log(JSON.stringify(x))
-                if (process.send) {
-                    process.send( JSON.stringify({ type: 'data', data: x }) );
-                    process.send( JSON.stringify({ type: 'memusage', usedMem: process.memoryUsage().heapUsed / 1024 / 1024 }) );
-                }
-        
-                intervalCount = 0
-                numUsersChecked = new Array<number>();
-                checkTime = new Array<number>();
-                marginRatioMap = new Map<string, number>();
-            }, 60 * 1000 * workerLoopTimeInMinutes)
+    try {
+        if (startWorkerTryCount > 10) {
+            process.exit();
         }
-        
-    })();
+        startWorkerTryCount++;
+        (async () => {
+            if (!clearingHouse.isSubscribed) {
+                await clearingHouse.subscribe();
+                startWorker();
+            } else {
+
+                setInterval(() => {
+                    sortUsers();
+                }, (60 * 1000));
+
+
+                setInterval(() => {
+                    checkBucket(highPriorityBucket)
+                    intervalCount++;
+                }, highPrioCheckUsersEveryMS);
+
+                setInterval(() => {
+                    checkBucket(mediumPriorityBucket)
+                    intervalCount++;
+                }, mediumPrioCheckUsersEveryMS);
+
+                setInterval(() => {
+                    checkBucket(lowPriorityBucket)
+                    intervalCount++;
+                }, lowPrioCheckUsersEveryMS);
+
+                
+                
+                setInterval(() => {
+                    const x = {
+                        ts: Date.now(),
+                        worker: uuid,
+                        data: {
+                            userCount: userMap.size,
+                            prio: {
+                                high: highPriorityBucket.getAllKeys().length,
+                                medium: mediumPriorityBucket.getAllKeys().length,
+                                low: lowPriorityBucket.getAllKeys().length
+                            },
+                            intervalCount: intervalCount,
+                            checked: numUsersChecked,
+                            margin: [...marginRatioMap.values()],
+                            time: checkTime,
+                            unrealizedPnLMap: JSON.stringify([...unrealizedPnLMap])
+                        }
+                    }
+                    // console.log(JSON.stringify(x))
+                    if (process.send) {
+                        process.send( JSON.stringify({ type: 'data', data: x }) );
+                        process.send( JSON.stringify({ type: 'memusage', usedMem: process.memoryUsage().heapUsed / 1024 / 1024 }) );
+                    }
+            
+                    intervalCount = 0
+                    numUsersChecked = new Array<number>();
+                    checkTime = new Array<number>();
+                    marginRatioMap = new Map<string, number>();
+
+                }, 60 * 1000 * workerLoopTimeInMinutes);
+
+                if (process.send) process.send( JSON.stringify({type: 'started' }));
+            }
+        })();
+    } catch (error) {
+        if (process.send) {
+            process.send({ type: 'error', data: error })
+        } else {
+            console.error(error);
+        }
+    }
+    
 }
 
 const processMessage = (data : MessageData) => {
     if (data.dataSource === 'user') {
         if (data.programUserAccount !== undefined && data.programUserAccount !== null) {
-            if (users.get(data.programUserAccount.publicKey) === undefined || users.get(data.programUserAccount.publicKey) === null) {
-                const user = ClearingHouseUser.from(
-                    clearingHouse,
-                    new PublicKey(data.programUserAccount.authority)
-                );
-                if (!user.isSubscribed) {
-                    user.subscribe().then(() => {
-
-                        users.set(data.programUserAccount.publicKey, user);
-                        if (user.getUserPositionsAccount().positions.length > 0) {
-                            prepareUserLiquidationIX(clearingHouse, user)
-                        }
-                        marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
-    
-                        user.accountSubscriber.eventEmitter.on('userPositionsData', () => {
-                            prepareUserLiquidationIX(clearingHouse, user)
-                            marginRatios.set(data.programUserAccount.publicKey, getMarginRatio(data.programUserAccount.publicKey));
-                        })
-                        
-                    })
-                }
+            if (!userMap.has(data.programUserAccount.publicKey)) {
+                setupUser(data.programUserAccount as User)
             }
         }
     } else if (data.dataSource === 'tx') {
         if (data.transaction.failed) {
-            prepareLiquidationIX(clearingHouse, new PublicKey(data.transaction.pub))
-        } else {
-            getLiqTransactionProfit(data.transaction.signature).then((balanceChange : number) => {
-                if (process.send) process.send( JSON.stringify( { type: 'error', data: `${new Date()} - Liquidated ${data.transaction.pub} Tx: ${data.transaction.signature} --- +${balanceChange.toFixed(2)} USDC` } ))
-            })
+            console.log(data.transaction);
+            prepareUserLiquidationIX(userMap.get(data.transaction.pub))
         }
-        
     }
+}
+
+enum Priority {
+    'high',
+    'medium',
+    'low'
+}
+
+const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
+const userMap : Map<string, User> = new Map<string, User>();
+
+const getPrio = (user : User) => {
+    return (user.marginRatio.lte(new BN(highPriorityMarginRatio)) ? Priority.high : (user.marginRatio.lte(new BN(mediumPriorityMarginRatio)) ? Priority.medium : Priority.low));
+}
+
+const sortUser = async (user: User) => {
+    user.marginRatio = getMarginRatio(user);
+    let currentPrio = user.prio;
+    let newPrio = getPrio(user);
+    if (currentPrio !== newPrio) {
+        if (currentPrio !== undefined)
+        accountSubscriberBucketMap.get(currentPrio).removeAccountsToPoll(user.publicKey);
+
+        userMap.set(user.publicKey, { ...user, prio: newPrio})
+
+        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.accountPublicKey, async (data: UserAccount) => {
+            console.log('updated user', 'account data', user.publicKey)
+            let newData = { ...userMap.get(user.publicKey), accountData: data } as User
+            userMap.set(user.publicKey, newData);
+            sortUser(newData);
+        });
+
+        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positionsPublicKey, async (data: UserPositionsAccount) => {
+            console.log('updated user', 'positions data', user.publicKey)
+            let oldData = userMap.get(user.publicKey);
+            let newData = { ...oldData, positionsAccountData: data } as User;
+            newData.marginRatio = getMarginRatio(newData);
+            newData.liquidationInstruction = await prepareUserLiquidationIX(newData);
+            userMap.set(user.publicKey, newData);
+            sortUser(newData);
+        });
+
+    }
+}
+
+const sortUsers = async () => {
+    [...userMap.values()].forEach(async user => sortUser(user));
+}
+
+const setupUser = async (u : User) => {
+
+    const userAccountPub = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(u.authority));
+
+    //@ts-ignore
+    let rpcResponse = await clearingHouse.program.provider.connection._rpcRequest(
+        'getMultipleAccounts',
+        [[userAccountPub.toBase58()], { commitment: 'recent' }]
+    );
+
+    // console.log(rpcResponse); 
+    
+    let raw: string = rpcResponse.result.value[0].data[0];
+    let dataType = rpcResponse.result.value[0].data[1];
+    let buffer = Buffer.from(raw, dataType);
+
+    const userAccount = clearingHouse.program.account[
+        'user'
+    ].coder.accounts.decode(
+        // @ts-ignore
+        clearingHouse.program.account['user']._idlAccount.name,
+        buffer
+    ) as UserAccount
+
+
+    //@ts-ignore
+    rpcResponse = await clearingHouse.program.provider.connection._rpcRequest(
+        'getMultipleAccounts',
+        [[userAccount.positions.toBase58()], { commitment: 'recent' }]
+    );
+
+    raw = rpcResponse.result.value[0].data[0];
+    dataType = rpcResponse.result.value[0].data[1];
+    buffer = Buffer.from(raw, dataType);
+
+    const userPositionsAccount  = clearingHouse.program.account[
+        'userPositions'
+    ].coder.accounts.decode(
+        // @ts-ignore
+        clearingHouse.program.account['userPositions']._idlAccount.name,
+        buffer
+    ) as UserPositionsAccount
+
+    u = { ...u, accountData: userAccount, positionsAccountData: userPositionsAccount, accountPublicKey: userAccountPub.toBase58(), positionsPublicKey: userAccount.positions.toBase58()  }
+    
+    u.marginRatio = getMarginRatio(u);
+    u.liquidationInstruction = await prepareUserLiquidationIX(u);
+    userMap.set(u.publicKey, u);
+    sortUser(u);
 }
 
 interface MessageData {
@@ -381,9 +437,28 @@ process.on('message', (data : MessageData) => {
     processMessage(data)
 });
 
-
 clearingHouse = _.createClearingHouse(workerConnection)
-startWorker()
 
+const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 60 * 1000);
+lowPriorityBucket.subscribe();
+accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-if (process.send) process.send( JSON.stringify({type: 'started' }));
+const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 30 * 1000);
+mediumPriorityBucket.subscribe();
+accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
+
+const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 5 * 1000);
+highPriorityBucket.subscribe();
+accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
+
+const subAndStartWorker = () => {
+    clearingHouse.subscribe().then((subscribed) => {
+        if (subscribed) {
+            startWorker()
+        } else {
+            subAndStartWorker();
+        }
+    })
+}
+
+subAndStartWorker();
