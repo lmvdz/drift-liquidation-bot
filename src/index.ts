@@ -65,13 +65,13 @@ const minLiquidationDistance = 2 // *** currently unused by the workers, just ch
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0.05
+const partialLiquidationSlippage = 0
 
-const highPriorityMarginRatio = 650
-const mediumPriorityMarginRatio = 1000
+const highPriorityMarginRatio = 1000
+const mediumPriorityMarginRatio = 2000
 
 // how many workers to check for users will there be
-const workerCount = 20;
+const workerCount = 7;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -245,7 +245,7 @@ const print = async () => {
                 "Average Worker MS": (x["Total MS"] / workerCount).toFixed(2),
                 "Average Worker Check MS": ((x["Total MS"] / workerCount) / (x["Times Checked"] / workerCount)).toFixed(2),
                 "Average User Check MS": ( x["User Check MS"] / workerCount).toFixed(6),
-                "Min Margin %": ( x["Min Margin %"] ).toFixed(6)
+                "Min Margin %": ( x["Min Margin %"] ).toFixed(2)
             }
         }))
 
@@ -450,11 +450,11 @@ const startWorker = (workerUUID: string, index: number) => {
                         max: Math.max(...d.data.data.checked),
                         total: parseInt((d.data.data.checked.reduce((a, b) => a+b, 0))+""),
                     }
+                    // console.log(d.data.data.margin)
                     d.data.data.margin = {
-                        min: Math.min(...d.data.data.margin, 0),
+                        min: Math.min(...d.data.data.margin) / 100,
                         avg: d.data.data.margin.length === 0 ? 0 : ([...d.data.data.margin].reduce((a, b) => a+b, 0)/(d.data.data.margin.length)).toFixed(2),
                         max: Math.max(...d.data.data.margin, 0),
-                        total: ([...d.data.data.margin].reduce((a, b) => a+b, 0)),
                         length: d.data.data.margin.length
                     }
                     d.data.data.time = {
@@ -553,19 +553,21 @@ const startLiquidationBot = async (workerCount) => {
             used += workerMemUsed;
         })
         console.log(`total mem usage: ${used.toFixed(2)} MB`)
-        transactions.forEach((unconfirmedTx) => {
+        console.log(`total tx unconfirmed ${transactions.size}`);
+        transactions.forEach((unconfirmedTx, index) => {
             if (unconfirmedTx.time + (30 * 1000) > Date.now()) {
                 indexConnection.getConfirmedTransaction(unconfirmedTx.tx, 'confirmed').then(tx => {
                     const worker = workers.get(unconfirmedTx.worker);
                     if (tx) {
                         if (tx.meta.err) {
-                            worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: true, pub: unconfirmedTx.pub } })
+                            // worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: true, pub: unconfirmedTx.pub } })
                         } else {
                             worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: false, pub: unconfirmedTx.pub } })
                         }
+                        // console.log('deleted:', transactions.delete(unconfirmedTx));
                     }
-                    transactions.delete(unconfirmedTx);
                 })
+                transactions.delete(unconfirmedTx);
             }
         })
     }, 30 * 1000)

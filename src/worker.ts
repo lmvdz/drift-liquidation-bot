@@ -155,6 +155,7 @@ const prepareLiquidationIX = (userPub: string, userAccountPub : PublicKey) : Pro
 // use div and mod to get the decimal values
 
 const slipLiq = PARTIAL_LIQUIDATION_RATIO.mul(new BN((1 + (partialLiquidationSlippage/100))))
+console.log(slipLiq.toString());
 
 
 const calculatePositionPNL = (
@@ -184,6 +185,7 @@ const unrealizedPnLMap : Map<string, string> = new Map<string, string>();
 
 const getMarginRatio = (user: User) => {
     const positions = user.positionsAccountData.positions;
+    
 
     if (positions.length === 0) {
         return BN_MAX;
@@ -193,9 +195,16 @@ const getMarginRatio = (user: User) => {
 
     positions.forEach(position => {
         const market = clearingHouse.getMarket(position.marketIndex);
-        const baseAssetAmountValue = calculateBaseAssetValue(market, position);
-        totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
-        unrealizedPNL = unrealizedPNL.add(calculatePositionPNL(market, position, baseAssetAmountValue, true));
+        if (market !== undefined) {
+            const baseAssetAmountValue = calculateBaseAssetValue(market, position);
+            totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
+            unrealizedPNL = unrealizedPNL.add(calculatePositionPNL(market, position, baseAssetAmountValue, true));
+        } else {
+            console.log(user.accountData.positions.toBase58(), user.publicKey);
+            console.log(market, position.marketIndex.toString());
+            console.log('market undefined', market);
+        }
+        
     })
 
     // unrealizedPnLMap.set(pub, unrealizedPNL.toString());
@@ -227,8 +236,6 @@ const checkBucket = (bucket: PollingAccountSubscriber) => {
     checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
 }
 
-let marginRatioMap : Map<string, number> = new Map<string, number>();
-
 // prepare variables for liquidation loop
 let intervalCount = 0
 let numUsersChecked = new Array<number>();
@@ -249,7 +256,7 @@ const startWorker = () => {
 
                 setInterval(() => {
                     sortUsers();
-                }, (60 * 1000));
+                }, (10 * 1000));
 
 
                 setInterval(() => {
@@ -282,7 +289,7 @@ const startWorker = () => {
                             },
                             intervalCount: intervalCount,
                             checked: numUsersChecked,
-                            margin: [...marginRatioMap.values()],
+                            margin: [...userMap.values()].map(u => u.marginRatio.toNumber()),
                             time: checkTime,
                             unrealizedPnLMap: JSON.stringify([...unrealizedPnLMap])
                         }
@@ -296,7 +303,6 @@ const startWorker = () => {
                     intervalCount = 0
                     numUsersChecked = new Array<number>();
                     checkTime = new Array<number>();
-                    marginRatioMap = new Map<string, number>();
 
                 }, 60 * 1000 * workerLoopTimeInMinutes);
 
@@ -322,8 +328,7 @@ const processMessage = (data : MessageData) => {
         }
     } else if (data.dataSource === 'tx') {
         if (data.transaction.failed) {
-            console.log(data.transaction);
-            prepareUserLiquidationIX(userMap.get(data.transaction.pub))
+            sortUser(userMap.get(data.transaction.pub))
         }
     }
 }
@@ -352,14 +357,15 @@ const sortUser = async (user: User) => {
         userMap.set(user.publicKey, { ...user, prio: newPrio})
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.accountPublicKey, async (data: UserAccount) => {
-            console.log('updated user', 'account data', user.publicKey)
+            // console.log('updated user', 'account data', user.publicKey)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
             sortUser(newData);
         });
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positionsPublicKey, async (data: UserPositionsAccount) => {
-            console.log('updated user', 'positions data', user.publicKey)
+            // console.log(data);
+            // console.log('updated user', 'positions data', user.publicKey)
             let oldData = userMap.get(user.publicKey);
             let newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(newData);
@@ -439,15 +445,15 @@ process.on('message', (data : MessageData) => {
 
 clearingHouse = _.createClearingHouse(workerConnection)
 
-const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 60 * 1000);
+const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 30 * 1000);
 lowPriorityBucket.subscribe();
 accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 30 * 1000);
+const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 15 * 1000);
 mediumPriorityBucket.subscribe();
 accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 5 * 1000);
+const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 1000);
 highPriorityBucket.subscribe();
 accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
 
