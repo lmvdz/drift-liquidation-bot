@@ -68,7 +68,7 @@ const minLiquidationDistance = 2 // *** currently unused by the workers, just ch
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0
+const partialLiquidationSlippage = 0.08
 
 const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
