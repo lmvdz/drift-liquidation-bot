@@ -30,6 +30,9 @@ config({path: './.env.local'});
 
 
 const indexConnection = new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig)
+indexConnection.getRecentBlockhash().then(block => {
+    console.log(block);
+});
 const clearingHouse = _.createClearingHouse(indexConnection);
 let tpuConnection : TpuConnection = null;
 
@@ -242,7 +245,7 @@ const print = async () => {
                 "Low Prio": x["Low Prio"],
                 "User Count": x["User Count"],
                 "Average Times Checked": (parseInt(x["Times Checked"] + "") / workerCount).toFixed(0),
-                "Average Worker MS": (x["Total MS"] / workerCount).toFixed(2),
+                "Average Worker MS Spent": (x["Total MS"] / workerCount).toFixed(2),
                 "Average Worker Check MS": ((x["Total MS"] / workerCount) / (x["Times Checked"] / workerCount)).toFixed(2),
                 "Average User Check MS": ( x["User Check MS"] / workerCount).toFixed(6),
                 "Min Margin %": ( x["Min Margin %"] ).toFixed(2)
@@ -535,6 +538,7 @@ const startWorkers = (workerCount) : Promise<void> => {
 
 const startLiquidationBot = async (workerCount) => {
     tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
+
     const subscribed = await clearingHouse.subscribe(["liquidationHistoryAccount", "fundingRateHistoryAccount"])
     
     if (subscribed) startWorkers(workerCount);
