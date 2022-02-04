@@ -17,41 +17,52 @@ More workers = More RAM
 
   
 Create a `.env.local` file in the root of the project.  
-The bot will look for the `BOT_KEY` variable in the environment file.  
+The bot will look for the `BOT_KEY` and `RPC_URL` variable in the environment file.  
 The `BOT_KEY` can either be a Uint8Array (solana-keygen) or base_58 encoded private key (phantom wallet export).  
+The `RPC_URL` should point to your rpc of choice.
 
 There are some config variables you can configure near the top of `index.ts`.  
 
-- how often to get new users from on chain  
-`userUpdateTimeInMinutes`  
+```
+// CONFIG THE BOT
 
-- how long is considered 1 loop for the worker
-`workerLoopTimeInMinutes`
+// how many minutes before users will be fetched from on chain ( get new users )
+const userUpdateTimeInMinutes = 10
 
-- how often the loop resets and checks for new users to subscribe to  
-`liquidationLoopTimeInMinutes`  
-  
-- how often the loop checks all users' liquidation distance  
-`updateAllMarginRatiosInMinutes`  
-  
-- how often to check for liquidatable users within minimum liquidation distance  
-`checkUsersEveryMS`  
-  
-- min liquidation distance to consider  
-`minLiquidationDistance`  
-  
-  
-- partial liquidation slippage to account for the time it takes to send the transaction (frontrunning)  
-- the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)  
-`partialLiquidationSlippage`  
-  
-- number of workers, each worker will have an equal amount of users  
-`workerCount`  
+// how many minutes is considered one loop for the worker
+const workerLoopTimeInMinutes = 1
 
-- whether or not to split the users into equal amounts for each worker  
-- if this is false, and the worker count is greater than 1 than each worker will have a copy of all users  
-`splitUsersBetweenWorkers`  
+// update all margin ratios every x minutes
+const updateAllMarginRatiosInMinutes = 1
 
+const highPrioCheckUsersEveryMS = 5
+const mediumPrioCheckUsersEveryMS = 1000
+const lowPrioCheckUsersEveryMS = 5 * 1000
+ 
+
+// only check users who's liquidation distance is less than X
+// liquidation distance is calculated using the calcDistanceToLiq function
+// (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
+// 1 corresponds to liquidatable
+// anything greater than 1 is no liquidatable
+// a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
+// 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
+// adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
+const minLiquidationDistance = 2 // *** currently unused by the workers, just checks all of the users. ***
+
+// the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
+// essentially trying to frontrun the transaction 
+const partialLiquidationSlippage = 0
+
+const highPriorityMarginRatio = 1000
+const mediumPriorityMarginRatio = 2000
+
+// how many workers to check for users will there be
+const workerCount = 7;
+
+// split the amount of users up into equal amounts for each worker
+const splitUsersBetweenWorkers = true
+```
 
 ```
 npm install
