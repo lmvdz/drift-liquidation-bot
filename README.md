@@ -13,7 +13,7 @@ By using child_process to split the work of (getting users / subscribing) and (c
 Currently the bot is hardcoded to run 80 workers at a time.  
 Uses a lot of CPU at the start!  
 CPU usage falls off after all the users are loaded/subscribed  
-More workers = More RAM  
+More workers = More RAM!!
 
   
 Create a `.env.local` file in the root of the project.  
