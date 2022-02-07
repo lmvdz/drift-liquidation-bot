@@ -306,6 +306,8 @@ interface WorkerStatus {
 
 const workerStatus : Map<string, WorkerStatus> = new Map<string, WorkerStatus>();
 
+let getNewUsersInterval : NodeJS.Timer = null;
+
 const startWorker = (workerUUID: string, index: number) => {
     workers.set(workerUUID, 
         fork(
@@ -436,7 +438,8 @@ const startWorker = (workerUUID: string, index: number) => {
                         } else {
                             getNewUsers();
                         }
-                        setTimeout(() => {
+                        if (getNewUsersInterval) clearInterval(getNewUsersInterval);
+                        getNewUsersInterval = setInterval(() => {
                             getNewUsers();
                         }, 60 * 1000 * userUpdateTimeInMinutes)
                     }
