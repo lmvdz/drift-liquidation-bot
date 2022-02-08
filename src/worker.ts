@@ -154,8 +154,7 @@ const prepareLiquidationIX = (userPub: string, userAccountPub : PublicKey) : Pro
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
 
-const slipLiq = PARTIAL_LIQUIDATION_RATIO.mul(new BN((1 + (partialLiquidationSlippage/100))))
-console.log(slipLiq.toString());
+const slipLiq = new BN(PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
 
 const calculatePositionPNL = (

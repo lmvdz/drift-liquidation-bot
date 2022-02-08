@@ -43,7 +43,7 @@ let tpuConnection : TpuConnection = null;
 // CONFIG THE BOT
 
 // how many minutes before users will be fetched from on chain ( get new users )
-const userUpdateTimeInMinutes = 10
+const userUpdateTimeInMinutes = 2
 
 // how many minutes is considered one loop for the worker
 const workerLoopTimeInMinutes = 1
@@ -68,13 +68,13 @@ const minLiquidationDistance = 2 // *** currently unused by the workers, just ch
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0.08
+const partialLiquidationSlippage = 0.8
 
 const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
 
 // how many workers to check for users will there be
-const workerCount = 7;
+const workerCount = 8;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -98,7 +98,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
         Promise.all(
             programUserAccounts.filter(programUserAccount => {
                 if (splitUsersBetweenWorkers) {
-                    return (workerAssignment.get(programUserAccount.publicKey) === undefined || workerAssignment.get(programUserAccount.publicKey) === null)
+                    return (!workerAssignment.has(programUserAccount.publicKey))
                 } else {
                     return true;
                 }
@@ -248,7 +248,7 @@ const print = async () => {
                 "Average Worker MS Spent": (x["Total MS"] / workerCount).toFixed(2),
                 "Average Worker Check MS": ((x["Total MS"] / workerCount) / (x["Times Checked"] / workerCount)).toFixed(2),
                 "Average User Check MS": ( x["User Check MS"] / workerCount).toFixed(6),
-                "Min Margin %": ( x["Min Margin %"] ).toFixed(2)
+                "Min Margin %": x["Min Margin %"] !== null ? ( x["Min Margin %"] ).toFixed(2) : '0'
             }
         }))
 
@@ -306,6 +306,8 @@ interface WorkerStatus {
 
 const workerStatus : Map<string, WorkerStatus> = new Map<string, WorkerStatus>();
 
+let getNewUsersInterval : NodeJS.Timer = null;
+
 const startWorker = (workerUUID: string, index: number) => {
     workers.set(workerUUID, 
         fork(
@@ -320,7 +322,7 @@ const startWorker = (workerUUID: string, index: number) => {
                 mediumPrioCheckUsersEveryMS,
                 lowPrioCheckUsersEveryMS,
                 minLiquidationDistance,
-                partialLiquidationSlippage*( !splitUsersBetweenWorkers ? (index+1) : 1),
+                partialLiquidationSlippage * ( !splitUsersBetweenWorkers ? (index+1) : 1),
                 highPriorityMarginRatio,
                 mediumPriorityMarginRatio
             ].map(x => x + ""),
@@ -407,6 +409,15 @@ const startWorker = (workerUUID: string, index: number) => {
                 })
                 break;
             case 'started':
+                if (getNewUsersInterval === null) {
+                    getNewUsersInterval = setInterval(() => {
+                        console.log('getting new users');
+                        if (fs.pathExistsSync('./storage/programUserAccounts')) {
+                            let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
+                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
+                        }
+                    }, 60 * 1000 * userUpdateTimeInMinutes)
+                }
                 if (workerStatus.get(workerUUID).restarting) {
                     console.log('sending users to restarted worker ' + workerUUID)
                     let newWorker = workers.get(workerUUID);
@@ -432,13 +443,7 @@ const startWorker = (workerUUID: string, index: number) => {
                         if (fs.pathExistsSync('./storage/programUserAccounts')) {
                             let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
                             loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
-                            getNewUsers();
-                        } else {
-                            getNewUsers();
                         }
-                        setTimeout(() => {
-                            getNewUsers();
-                        }, 60 * 1000 * userUpdateTimeInMinutes)
                     }
                 }
                 break;

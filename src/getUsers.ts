@@ -20,11 +20,9 @@ clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAc
     if (fs.pathExistsSync('./storage/programUserAccounts')) {
         const programUserAccounts = fs.readFileSync('./storage/programUserAccounts', 'utf8')
         const existingUserAccounts = JSON.parse(atob(programUserAccounts)) as Array<{ publicKey: string, authority: string}>;
-        let newlyAddedCount = 0
         newProgramUserAccounts.forEach((newUserAccount: ProgramAccount) => {
             if(!existingUserAccounts.some(userAccount => userAccount.publicKey === newUserAccount.publicKey.toBase58())) {
                 existingUserAccounts.push({ publicKey: newUserAccount.publicKey.toBase58(), authority: newUserAccount.account.authority.toBase58()})
-                newlyAddedCount++
             }
         })
         fs.writeFileSync('./storage/programUserAccounts', btoa(JSON.stringify(existingUserAccounts)))
