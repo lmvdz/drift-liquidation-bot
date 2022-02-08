@@ -30,9 +30,6 @@ config({path: './.env.local'});
 
 
 const indexConnection = new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig)
-indexConnection.getRecentBlockhash().then(block => {
-    console.log(block);
-});
 const clearingHouse = _.createClearingHouse(indexConnection);
 let tpuConnection : TpuConnection = null;
 
