@@ -44,37 +44,19 @@ const uuid = args[2]
 
 // CONFIG THE LOOP TAKEN FROM THE ARGUMENTS SUPPLIED FROM INDEX.TS
 
-// worker loop time in minutes
 const workerLoopTimeInMinutes = parseFloat(args[3])
 
-// update the liquidation distance of all users every X minutes, must be lower than the liquidationLoopTimeInMinutes otherwise won't be called
-const updateAllMarginRatiosInMinutes = parseFloat(args[4])
+const highPrioCheckUsersEveryMS = parseFloat(args[4])
 
-// check high/medium/low priority users for liquidation every X milliseconds
-const highPrioCheckUsersEveryMS = parseFloat(args[5])
+const mediumPrioCheckUsersEveryMS = parseFloat(args[5])
 
-const mediumPrioCheckUsersEveryMS = parseFloat(args[6])
+const lowPrioCheckUsersEveryMS = parseFloat(args[6])
 
-const lowPrioCheckUsersEveryMS = parseFloat(args[7])
+const partialLiquidationSlippage = parseFloat(args[7])
 
-// only check users who's liquidation distance is less than X
-// liquidation distance is calculated using the calcDistanceToLiq function
-// (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
-// 1 corresponds to liquidatable
-// anything greater than 1 is no liquidatable
-// a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
-// 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
-// adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = parseFloat(args[8]); // currently not used, all users are checked each call!
+const highPriorityMarginRatio = parseFloat(args[8])
 
-// the slippage of partial liquidation as a percentage
-const partialLiquidationSlippage = parseFloat(args[9])
-
-// the margin ratio to consider high prio
-const highPriorityMarginRatio = parseFloat(args[10])
-
-// the margin ratio to consider medium prio
-const mediumPriorityMarginRatio = parseFloat(args[11])
+const mediumPriorityMarginRatio = parseFloat(args[9])
 
 
 interface User {

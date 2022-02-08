@@ -26,15 +26,19 @@ There are some config variables you can configure near the top of `index.ts`.
 ```
 // CONFIG THE BOT
 
-// how many minutes before users will be fetched from on chain ( get new users )
+// how many minutes before users will be fetched from storage
+// the getUsersLoop.ts script will update the storage every minute
 const userUpdateTimeInMinutes = 2
 
 // how many minutes is considered one loop for the worker
+// console will be cleared and new table/chart data will be displayed
 const workerLoopTimeInMinutes = 1
 
-// update all margin ratios every x minutes
+// update all margin ratios every X minutes
 const updateAllMarginRatiosInMinutes = 1
 
+
+// check priority every X ms
 const highPrioCheckUsersEveryMS = 5
 const mediumPrioCheckUsersEveryMS = 1000
 const lowPrioCheckUsersEveryMS = 5 * 1000
@@ -44,10 +48,11 @@ const lowPrioCheckUsersEveryMS = 5 * 1000
 // essentially trying to frontrun the transaction
 const partialLiquidationSlippage = 0
 
+// the margin ratio which determines which priority bucket the user will be a part of 
 const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
 
-// how many workers to check for users will there be
+// how many instances of the worker.ts script will there be
 const workerCount = 7;
 
 // split the amount of users up into equal amounts for each worker

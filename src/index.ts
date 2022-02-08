@@ -42,39 +42,31 @@ let tpuConnection : TpuConnection = null;
 
 // CONFIG THE BOT
 
-// how many minutes before users will be fetched from on chain ( get new users )
+// how many minutes before users will be fetched from storage
+// the getUsersLoop.ts script will update the storage every minute
 const userUpdateTimeInMinutes = 2
 
 // how many minutes is considered one loop for the worker
+// console will be cleared and new table/chart data will be displayed
 const workerLoopTimeInMinutes = 1
 
-// update all margin ratios every x minutes
-const updateAllMarginRatiosInMinutes = 1
 
+// check priority every X ms
 const highPrioCheckUsersEveryMS = 5
 const mediumPrioCheckUsersEveryMS = 1000
 const lowPrioCheckUsersEveryMS = 5 * 1000
- 
 
-// only check users who's liquidation distance is less than X
-// liquidation distance is calculated using the calcDistanceToLiq function
-// (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
-// 1 corresponds to liquidatable
-// anything greater than 1 is no liquidatable
-// a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
-// 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
-// adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = 2 // *** currently unused by the workers, just checks all of the users. ***
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
-// essentially trying to frontrun the transaction 
-const partialLiquidationSlippage = 0.8
+// essentially trying to frontrun the transaction
+const partialLiquidationSlippage = 0
 
+// the margin ratio which determines which priority bucket the user will be a part of 
 const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
 
-// how many workers to check for users will there be
-const workerCount = 8;
+// how many instances of the worker.ts script will there be
+const workerCount = 7;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -124,18 +116,18 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
         })
     })
 };
-
+// currently unused
 const unrealizedPNLMap : Map<string, string> = new Map<string, string>();
 
+
+// used for the funding table
 interface MarketFunding {
     marketId: number,
     marketSymbol: string,
     ts: number,
     rate: string
 }
-
 const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
-
 const getFunding = () => {
     let fundingTable = [];
     const funding = clearingHouse.getFundingRateHistoryAccount().fundingRateRecords
@@ -171,7 +163,6 @@ const getFunding = () => {
     });
 
 }
-
 
 // used to print out the tables and chart to console
 const print = async () => {
@@ -317,11 +308,9 @@ const startWorker = (workerUUID: string, index: number) => {
                 index,
                 workerUUID,
                 workerLoopTimeInMinutes,
-                updateAllMarginRatiosInMinutes,
                 highPrioCheckUsersEveryMS,
                 mediumPrioCheckUsersEveryMS,
                 lowPrioCheckUsersEveryMS,
-                minLiquidationDistance,
                 partialLiquidationSlippage * ( !splitUsersBetweenWorkers ? (index+1) : 1),
                 highPriorityMarginRatio,
                 mediumPriorityMarginRatio
@@ -516,6 +505,8 @@ const startWorker = (workerUUID: string, index: number) => {
     })
 }
 
+
+// used for checking transactions which we send through the TPU client
 interface UnconfirmedTx {
     pub: string,
     time: number,
@@ -555,7 +546,7 @@ const startLiquidationBot = async (workerCount) => {
         })
     }, 1000 * 60 * 60)
 
-    // check for transactions
+    // check for transactions and print out total memory usage
     setInterval(() => {
         let used = process.memoryUsage().heapUsed / 1024 / 1024;
         memusage.forEach(workerMemUsed => {
@@ -563,13 +554,15 @@ const startLiquidationBot = async (workerCount) => {
         })
         console.log(`total mem usage: ${used.toFixed(2)} MB`)
         console.log(`total tx unconfirmed ${transactions.size}`);
-        transactions.forEach((unconfirmedTx, index) => {
+        // async because order doesn't matter
+        transactions.forEach(async (unconfirmedTx, index) => {
             if (unconfirmedTx.time + (30 * 1000) > Date.now()) {
                 indexConnection.getConfirmedTransaction(unconfirmedTx.tx, 'confirmed').then(tx => {
                     const worker = workers.get(unconfirmedTx.worker);
                     if (tx) {
                         if (tx.meta.err) {
-                            // worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: true, pub: unconfirmedTx.pub } })
+                            if (worker.connected)
+                                worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: true, pub: unconfirmedTx.pub } })
                         } else {
                             worker.send({ dataSource: 'tx', transaction: { signature: unconfirmedTx.tx, failed: false, pub: unconfirmedTx.pub } })
                         }
