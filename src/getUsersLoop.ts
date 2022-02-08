@@ -1,11 +1,26 @@
 import { exec } from 'child_process';
 
-setInterval(() => {
+const getUsers = () => {
     exec("node --no-warnings --loader ts-node/esm ./src/getUsers.js", (error, stdout, stderr) => {
-        if (stderr) {
-            console.error(stderr)
+        if (stdout.includes('done')) {
+            console.log(new Date(Date.now()) + ' done.');
         } else {
-            console.log(new Date(Date.now()) + ' ' + stdout)
+            console.error(stderr)
         }
     })
-}, 1000 * 60)
+}
+
+const loop = () => {
+    getUsers()
+    setInterval(() => {
+        getUsers()
+    }, 1000 * 60)
+}
+
+
+
+process.on('uncaughtException', (error) => {
+    console.error(error)
+});
+
+loop();

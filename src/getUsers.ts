@@ -11,7 +11,7 @@ import { default as _ } from './clearingHouse.js';
 
 import { config } from 'dotenv';
 import { Connection, ConnectionConfig } from '@solana/web3.js';
-config({path: './.env.local'});
+config( {path: './.env.local'} );
 
 
 const clearingHouse = _.createClearingHouse(new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 1000 * 60 } as ConnectionConfig))

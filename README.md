@@ -27,7 +27,7 @@ There are some config variables you can configure near the top of `index.ts`.
 // CONFIG THE BOT
 
 // how many minutes before users will be fetched from on chain ( get new users )
-const userUpdateTimeInMinutes = 10
+const userUpdateTimeInMinutes = 2
 
 // how many minutes is considered one loop for the worker
 const workerLoopTimeInMinutes = 1
@@ -38,20 +38,10 @@ const updateAllMarginRatiosInMinutes = 1
 const highPrioCheckUsersEveryMS = 5
 const mediumPrioCheckUsersEveryMS = 1000
 const lowPrioCheckUsersEveryMS = 5 * 1000
- 
 
-// only check users who's liquidation distance is less than X
-// liquidation distance is calculated using the calcDistanceToLiq function
-// (margin_ratio / (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 )))) + (margin_ratio % (partial_liquidation_ratio * ( 1 + (partialLiquidationSlippage / 100 ))))
-// 1 corresponds to liquidatable
-// anything greater than 1 is no liquidatable
-// a value of 10 will mean all the users with margin_ratios less than 10 times the value of the partial_liquidation_ratio will be checked
-// 625 is the partial_liquidation_ratio, so a value of 10 will mean users with margin_ratios less than 6250
-// adding on the slipage of 4 % will make the partial_liquidation_ratio 650, so a value of 10 will mean users with margin_ratios less than 6500
-const minLiquidationDistance = 2 // *** currently unused by the workers, just checks all of the users. ***
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
-// essentially trying to frontrun the transaction 
+// essentially trying to frontrun the transaction
 const partialLiquidationSlippage = 0
 
 const highPriorityMarginRatio = 1000
@@ -65,15 +55,26 @@ const splitUsersBetweenWorkers = true
 ```
 
 ```
-npm install
-npm run start
+$ npm install
+
+
+# This next command will run the user getter, I split it away from the main program because I was running multiple instances of the bot.
+# This way it will only get the users once and each bot will check the storage file
+
+$ npm run getUsers
+
+$ npm run start
 ```
 
   
 
-Most of the code is documented.  
+Most of the code was documented, then I did a lot of changes to adapt to the environment. This bot was killing it on the liquidations, then the solana network was taking massive load and my bot would just crash on the GG RPC Network from my home setup.
 
-The bot is optimized to only check to liquidate users who's margin_ratio is extremely close to being partially liquidated, which increases the speed at which the program can loop, increasing the odds of your liquidator being used as the matchmaker, threadripper, sniper, pimp, w/e you want to call it!
+Since then I've implemented a TPU Client (ported from the rust solana::tpu_client)
+Built a custom User Account Polling solution, similiar to what is currently on the protocol-v1 orders branch.
+
+The bot is optimized to check buckets of users based on their margin_ratio.
+Users with margin_ratio' closer to being partially liquidated are assigned to a higher priority bucket, which increases time spent checking those important users, increasing the odds of your liquidator being the winner.
 
 If you have questions, find me in the Drift Protocol discord: https://discord.gg/uDNCH9QC `@lmvdzande#0001`
 
