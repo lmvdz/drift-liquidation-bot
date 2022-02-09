@@ -188,7 +188,7 @@ const getMarginRatio = (user: User) => {
         
     })
 
-    // unrealizedPnLMap.set(pub, unrealizedPNL.toString());
+    // unrealizedPnLMap.set(user.publicKey, unrealizedPNL.toString());
 
     if (totalPositionValue.eq(ZERO)) {
         return BN_MAX;
