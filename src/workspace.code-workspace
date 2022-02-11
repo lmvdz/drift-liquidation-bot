@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../.."
+		},
+		{
+			"name": "drift-liquidation-bot",
+			"path": ".."
+		}
+	],
+	"settings": {}
+}

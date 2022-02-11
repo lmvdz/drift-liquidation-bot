@@ -56,14 +56,14 @@ const lowPrioCheckUsersEveryMS = 5 * 1000
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 0
+const partialLiquidationSlippage = 0.8
 
 // the margin ratio which determines which priority bucket the user will be a part of 
 const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
 
 // how many instances of the worker.ts script will there be
-const workerCount = 7;
+const workerCount = 8;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
