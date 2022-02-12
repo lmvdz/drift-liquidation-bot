@@ -121,7 +121,7 @@ const liquidate = (user: User) : Promise<string> => {
 const prepareUserLiquidationIX = async (user: User) : Promise<TransactionInstruction> => {
     if (user.userAccountPublicKey === undefined || user.userAccountPublicKey === null)
     user.userAccountPublicKey = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
-    console.log('here')
+    // console.log('here')
     txSentCount++;
     userMap.set(user.publicKey, user);
     const liquidationInstruction = await prepareLiquidationIX(user.publicKey, user.userAccountPublicKey);
@@ -456,7 +456,7 @@ const setupUsers = async (users: Array<User>) => {
                     user.marginRatio = getMarginRatio(user);
                     // u.liquidationInstruction = await prepareUserLiquidationIX(u);
                     let endTime = process.hrtime(startTime);
-                    console.log(txSentCount + ' txs ', endTime[0] + ' seconds');
+                    // console.log(txSentCount + ' txs ', endTime[0] + ' seconds');
                     userMap.set(user.publicKey, user);
                     await sortUser(user)
                 }))
