@@ -2,8 +2,6 @@ import { fork, exec, ChildProcess } from 'child_process';
 import { atob } from './util/atob.js';
 import fs from 'fs-extra'
 import bs58 from 'bs58'
-// const spinnies = new Spinnies({ spinnerColor: 'blueBright'})
-// spinnies.add('main', { text: 'Lmvdzande\'s Liquidation Bot'})
 
 import { randomUUID } from 'crypto'
 
@@ -19,10 +17,10 @@ import {
 } from './liqHistoryVisualizer.js'
 
 import { 
-    Markets, 
+    Markets, UserPositionsAccount, 
 } from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
-import { Connection, ConnectionConfig, Transaction } from '@solana/web3.js';
+import { Connection, ConnectionConfig, PublicKey, Transaction } from '@solana/web3.js';
 
 
 import { config } from 'dotenv';
@@ -63,7 +61,7 @@ const highPriorityMarginRatio = 1000
 const mediumPriorityMarginRatio = 2000
 
 // how many instances of the worker.ts script will there be
-const workerCount = 8;
+const workerCount = 1;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
@@ -78,7 +76,7 @@ const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: stri
 }
 
 // holds which worker uuid has which user pubkey
-const workerAssignment : Map<string, { worker: string, publicKey: string, authority: string }> = new Map<string, { worker: string, publicKey: string, authority: string }>();
+const workerAssignment : Map<string, { worker: string, publicKey: string, authority: string, positions: string }> = new Map<string, { worker: string, publicKey: string, authority: string, positions: string }>();
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
@@ -93,11 +91,11 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
                 }
             }
                 
-            ).map((programUserAccount: {publicKey: string, authority: string}, index: number) : Promise<void> => {
+            ).map((programUserAccount: {publicKey: string, authority: string, positions: string }, index: number) : Promise<void> => {
                 return new Promise((innerResolve) => {
                     if (splitUsersBetweenWorkers) {
                         let worker = [...workers.keys()][index % workerCount];
-                        workerAssignment.set(programUserAccount.publicKey, { worker, publicKey: programUserAccount.publicKey, authority: programUserAccount.authority });
+                        workerAssignment.set(programUserAccount.publicKey, { worker, publicKey: programUserAccount.publicKey, authority: programUserAccount.authority, positions: programUserAccount.positions });
                         workers.get(worker).send({ dataSource: 'user', programUserAccount })
                         innerResolve()
                     } else {
@@ -400,7 +398,7 @@ const startWorker = (workerUUID: string, index: number) => {
                         console.log('getting new users');
                         if (fs.pathExistsSync('./storage/programUserAccounts')) {
                             let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
+                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string, positions: string }>)
                         }
                     }, 60 * 1000 * userUpdateTimeInMinutes)
                 }
@@ -410,12 +408,12 @@ const startWorker = (workerUUID: string, index: number) => {
                     if (splitUsersBetweenWorkers) {
                         workerAssignment.forEach((value, key) => {
                             if (workerUUID === value.worker) {
-                                newWorker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority }})
+                                newWorker.send({ dataSource: 'user', programUserAccount: { publicKey: value.publicKey, authority: value.authority, positions: value.positions }})
                             }
                         })
                     } else {
                         let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                        let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>
+                        let parsedUsers = JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>
                         parsedUsers.forEach(user => {
                             newWorker.send({dataSource: 'user', programUserAccount: user})
                         })
@@ -428,7 +426,7 @@ const startWorker = (workerUUID: string, index: number) => {
                         console.clear();
                         if (fs.pathExistsSync('./storage/programUserAccounts')) {
                             let userDataFromStorage = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string}>)
+                            loopSubscribeUser(JSON.parse(atob(userDataFromStorage)) as Array<{ publicKey: string, authority: string, positions: string }>)
                         }
                     }
                 }
