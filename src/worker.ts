@@ -115,7 +115,6 @@ const liquidate = (user: User) : Promise<string> => {
         process.send(JSON.stringify({ type: 'tx', rawTransaction: tx.serialize(), pub: user.publicKey }));
         resolve(bs58.encode(tx.signature));
     })
-    
 }
 
 const prepareUserLiquidationIX = async (user: User) : Promise<TransactionInstruction> => {

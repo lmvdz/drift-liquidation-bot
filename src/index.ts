@@ -111,8 +111,7 @@ const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string
         })
     })
 };
-// currently unused
-const unrealizedPNLMap : Map<string, string> = new Map<string, string>();
+
 
 
 // used for the funding table
@@ -242,6 +241,7 @@ const print = async () => {
 
     ), [getTable(getFunding())], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
     // reset workerData
+    unrealizedPNLMap = new Map<string, string>();
     workerData = new Map<string, string>();
 
 }
@@ -249,6 +249,8 @@ const print = async () => {
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
 // holds the data used to print information
 let workerData : Map<string, string> = new Map<string, string>();
+// currently unused
+let unrealizedPNLMap : Map<string, string> = new Map<string, string>();
 // used to make sure that print is only called once
 let printTimeout : NodeJS.Timer;
 
@@ -546,12 +548,15 @@ const startLiquidationBot = async (workerCount) => {
     }, 1000 * 60 * 60)
 
     // check for transactions and print out total memory usage
+
     setInterval(() => {
         let used = process.memoryUsage().heapUsed / 1024 / 1024;
         memusage.forEach(workerMemUsed => {
             used += workerMemUsed;
         })
         console.log(`total mem usage: ${used.toFixed(2)} MB`)
+    }, 1000 * 5)
+    setInterval(() => {
         console.log(`total tx unconfirmed ${transactions.size}`);
         // async because order doesn't matter
         transactions.forEach(async (unconfirmedTx, index) => {

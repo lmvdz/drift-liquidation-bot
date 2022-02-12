@@ -51,7 +51,7 @@ export const mapHistoryAccountToLiquidationsArray = (liquidationHistoryAccount :
     });
 }
 
-export const updateLiquidatorMap = ( liqMapped:Array<Liquidation> ) : Map<string, Array<Liquidation>> => {
+export const updateLiquidatorMap = ( liqMapped: Array<Liquidation> ) : Map<string, Array<Liquidation>> => {
     const liquidatorMap : Map<string, Array<Liquidation>> = new Map<string, Array<Liquidation>>();
     liqMapped.forEach(liq => {
         let liquidations = liquidatorMap.get(liq.liquidator)
