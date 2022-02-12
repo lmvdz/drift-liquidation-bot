@@ -119,11 +119,10 @@ const liquidate = (user: User) : Promise<string> => {
 }
 
 const prepareUserLiquidationIX = async (user: User) : Promise<TransactionInstruction> => {
-    if (user.userAccountPublicKey === undefined || user.userAccountPublicKey === null)
-    user.userAccountPublicKey = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
-    // console.log('here')
-    txSentCount++;
-    userMap.set(user.publicKey, user);
+    if (user.userAccountPublicKey === undefined || user.userAccountPublicKey === null) {
+        user.userAccountPublicKey = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
+        userMap.set(user.publicKey, user);
+    }
     const liquidationInstruction = await prepareLiquidationIX(user.publicKey, user.userAccountPublicKey);
     return liquidationInstruction;
 }

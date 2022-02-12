@@ -549,7 +549,6 @@ const startLiquidationBot = async (workerCount) => {
     setInterval(() => {
         let used = process.memoryUsage().heapUsed / 1024 / 1024;
         memusage.forEach(workerMemUsed => {
-            console.log(workerMemUsed)
             used += workerMemUsed;
         })
         console.log(`total mem usage: ${used.toFixed(2)} MB`)
