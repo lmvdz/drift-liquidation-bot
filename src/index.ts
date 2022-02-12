@@ -122,8 +122,10 @@ interface MarketFunding {
     ts: number,
     rate: string
 }
-const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
+let fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
 const getFunding = () => {
+    // reset the funding rate map, keep memory low
+    fundingRateMap = new Map<string, Array<MarketFunding>>();
     let fundingTable = [];
     const funding = clearingHouse.getFundingRateHistoryAccount().fundingRateRecords
     funding.map(record => {
@@ -239,12 +241,14 @@ const print = async () => {
         }))
 
     ), [getTable(getFunding())], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
+    // reset workerData
+    workerData = new Map<string, string>();
 
 }
 // map worker uuid to worker child process
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
 // holds the data used to print information
-const workerData : Map<string, string> = new Map<string, string>();
+let workerData : Map<string, string> = new Map<string, string>();
 // used to make sure that print is only called once
 let printTimeout : NodeJS.Timer;
 

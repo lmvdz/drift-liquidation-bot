@@ -393,7 +393,7 @@ const setupUsers = async (users: Array<User>) => {
     await Promise.all(usersSetup.map(async (userArray, index) => {
         const userAccountKeys = userArray.map(u => u.publicKey)
         const userPositions = userArray.map(u => u.positions)
-        sleep((index + 1) * 1000 * (workerIndex + 1)).then(() => {
+        sleep((index + 1) * 2000 * (workerIndex + 1)).then(() => {
             //@ts-ignore
             axios.post(workerConnection._rpcEndpoint, [{
                 jsonrpc: "2.0",
