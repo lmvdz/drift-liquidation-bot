@@ -338,6 +338,20 @@ const setupUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User
 // let numUsersChecked = new Array<number>();
 // let checkTime = new Array<number>();
 
+const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, tpuConnection: TpuConnection) => {
+    if (fs.pathExistsSync('./storage/programUserAccounts')) {
+        let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
+        (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>).forEach(async user => {
+            if (!userMap.has(user.publicKey))
+                setupUser(clearingHouse, userMap, accountSubscriberBucketMap, user as User, tpuConnection)
+        })
+    } else {
+        console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
+        console.error('try using "npm run getUsers" before running the bot')
+        process.exit();
+    }
+}
+
 const main = async () => {
     const tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
     const clearingHouse = _.createClearingHouse(tpuConnection)
@@ -345,17 +359,6 @@ const main = async () => {
 
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
-
-    if (fs.pathExistsSync('./storage/programUserAccounts')) {
-        let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
-        (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>).forEach(async user => {
-            setupUser(clearingHouse, userMap, accountSubscriberBucketMap, user as User, tpuConnection)
-        })
-    } else {
-        console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
-        console.error('try using "npm run getUsers" before running the bot')
-        process.exit();
-    }
 
     const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 60 * 1000);
     accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
@@ -366,6 +369,10 @@ const main = async () => {
     const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 10 * 1000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
+
+    setInterval(() => {
+        getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection)
+    }, 60 * 1000)
 
     setInterval(() => {
         sortUsers(clearingHouse, userMap, accountSubscriberBucketMap);
