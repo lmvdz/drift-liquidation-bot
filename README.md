@@ -19,6 +19,9 @@ $ cd protocol-v1
 $ git checkout barebones-polling-account
 $ cd ..
 
+# install yarn if not already
+$ npm install -g yarn
+
 # linux
 $ yarn rebuild
 
