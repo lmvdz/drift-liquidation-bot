@@ -122,10 +122,10 @@ interface MarketFunding {
     ts: number,
     rate: string
 }
-let fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
+
 const getFunding = () => {
     // reset the funding rate map, keep memory low
-    fundingRateMap = new Map<string, Array<MarketFunding>>();
+    const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
     let fundingTable = [];
     const funding = clearingHouse.getFundingRateHistoryAccount().fundingRateRecords
     funding.map(record => {
