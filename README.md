@@ -7,7 +7,36 @@
 ### Checkout [Drift Protocol](https://docs.drift.trade/) for more information!
 
 ### Donations can be sent to my SOL address 8Ci5UbpoAFL5sAj4jeKwADceYrDxKQktXJnn1Vwgug5m
-  
+
+Quick Setup: 
+
+```
+$ git clone git@github.com:lmvdz/drift-liquidation-bot.git
+$ cd drift-liquidation-bot
+$ git checkout worker
+$ git clone git@github.com:lmvdz/protocol-v1.git
+$ cd protocol-v1
+$ git checkout barebones-polling-account
+$ cd ..
+$ cd ..
+
+# linux
+$ yarn rebuild
+
+# windows
+$ yarn rebuild-win
+
+# both of these scripts should be run simultaneously, you can use pm2 to do that
+$ yarn getUsers
+$ yarn start
+
+$ npm install -g pm2
+$ pm2 start yarn --name "driftUsers" -- getUsers
+$ pm2 start yarn --name "drift" -- start
+$ pm2 list
+$ pm2 logs
+```
+
 By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript.  
 
 Currently the bot is hardcoded to run 80 workers at a time.  
