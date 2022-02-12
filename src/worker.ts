@@ -376,11 +376,10 @@ function sleep(milliseconds) {
 function chunkArray(array : Array<any>, chunk_size : number) : Array<any> {
     return new Array(Math.ceil(array.length / chunk_size)).fill(null).map((_, index) => index * chunk_size).map(begin => array.slice(begin, begin + chunk_size));
 } 
-let txSentCount = 0;
 
 const setupUsers = async (users: Array<User>) => {
     let usersSetup = []
-    let startTime = process.hrtime();
+
     usersSetup = chunkArray(await Promise.all(users.map(async (u, index) => {
         return {
             index,
@@ -414,7 +413,6 @@ const setupUsers = async (users: Array<User>) => {
                   },
                 ],
             }]).then(response => {
-                txSentCount++;
                 const userAccounts = response.data[0]
                 const userPositionAccounts = response.data[1]
 
@@ -452,9 +450,6 @@ const setupUsers = async (users: Array<User>) => {
                     }
 
                     user.marginRatio = getMarginRatio(user);
-                    // u.liquidationInstruction = await prepareUserLiquidationIX(u);
-                    let endTime = process.hrtime(startTime);
-                    // console.log(txSentCount + ' txs ', endTime[0] + ' seconds');
                     userMap.set(user.publicKey, user);
                     await sortUser(user)
                 }))
@@ -479,72 +474,6 @@ const setupUser = async (u : User) => {
             highPriorityBucket.subscribe();
         });
     }, 5000)
-    // try {
-
-    //     // const acc = await workerConnection.getMultipleAccountsInfo([new PublicKey('4tQB9kPyjQTB2v5Jso98d1EMwvN4jjNSXSrJQbqfEbQx')])
-    //     // const userPositionsAccount  = clearingHouse.program.account[
-    //     //     'userPositions'
-    //     // ].coder.accounts.decode(
-    //     //     // @ts-ignore
-    //     //     clearingHouse.program.account['userPositions']._idlAccount.name,
-    //     //     acc[0].data as Buffer
-    //     // ) as UserPositionsAccount
-    //     // console.log(userPositionsAccount);
-    //     // // console.log(u)
-    //     // const userAccountPub = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(u.authority));
-
-    //     // //@ts-ignore
-    //     // let rpcResponse = await clearingHouse.program.provider.connection._rpcRequest(
-    //     //     'getMultipleAccounts',
-    //     //     [[userAccountPub.toBase58()], { commitment: 'recent' }]
-    //     // );
-
-    //     // // console.log('here'); 
-        
-    //     // let raw: string = rpcResponse.result.value[0].data[0];
-    //     // let dataType = rpcResponse.result.value[0].data[1];
-    //     // let buffer = Buffer.from(raw, dataType);
-        
-    //     // const userAccount = clearingHouse.program.account[
-    //     //     'user'
-    //     // ].coder.accounts.decode(
-    //     //     // @ts-ignore
-    //     //     clearingHouse.program.account['user']._idlAccount.name,
-    //     //     buffer
-    //     // ) as UserAccount
-
-    //     // // console.log(userAccount.positions.toBase58())
-    //     // // console.log('here2'); 
-
-    //     // //@ts-ignore
-    //     // rpcResponse = await clearingHouse.program.provider.connection._rpcRequest(
-    //     //     'getMultipleAccounts',
-    //     //     [[userAccount.positions.toBase58()], { commitment: 'recent' }]
-    //     // );
-
-    //     // raw = rpcResponse.result.value[0].data[0];
-    //     // dataType = rpcResponse.result.value[0].data[1];
-    //     // buffer = Buffer.from(raw, dataType);
-
-    //     // const userPositionsAccount  = clearingHouse.program.account[
-    //     //     'userPositions'
-    //     // ].coder.accounts.decode(
-    //     //     // @ts-ignore
-    //     //     clearingHouse.program.account['userPositions']._idlAccount.name,
-    //     //     buffer
-    //     // ) as UserPositionsAccount
-
-    //     u = { ...u, accountData: userAccount, positionsAccountData: userPositionsAccount, accountPublicKey: userAccountPub.toBase58(), positions: userAccount.positions.toBase58()  }
-        
-    //     u.marginRatio = getMarginRatio(u);
-    //     u.liquidationInstruction = await prepareUserLiquidationIX(u);
-    //     userMap.set(u.publicKey, u);
-    //     console.log('here')
-    //     sortUser(u);
-    // } catch (error) {
-    //     // console.error(error, u)
-    //     // setupUser(u)
-    // }
 }
 
 interface MessageData {

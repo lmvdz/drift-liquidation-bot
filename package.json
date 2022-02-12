@@ -4,13 +4,15 @@
   "description": "",
   "exports": [
     "./src/index.ts",
-    "./src/getUsersLoop.ts"
+    "./src/getUsersLoop.ts",
+    "./src/single.ts"
   ],
   "type": "module",
   "scripts": {
     "rebuild": "cd protocol-v1/sdk && yarn && yarn build && cd ../../ && yarn upgrade",
     "rebuild-win": "cd protocol-v1/sdk && yarn && yarn build-win && cd ../../ && yarn upgrade",
     "start": "node  --loader ts-node/esm ./src/index.ts",
+    "single": "node --loader ts-node/esm ./src/single.ts",
     "getUsers": "node --loader ts-node/esm ./src/getUsersLoop.ts",
     "liqHistory": "node --no-warnings --loader ts-node/esm ./src/liqHistoryVisualizer.ts",
     "tpuTest": "node  --loader ts-node/esm ./src/testTpuClient.ts"

@@ -69,7 +69,7 @@ const splitUsersBetweenWorkers = true
 // loop to subscribe users, sometimes there are errors
 // so users who were unable to be subscribed to will be subscribed to in the next loop
 // loop runs until there are no more failed subscriptions or until there have been ten runs of the loop
-const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: string}>) : Promise<void> => {
+const loopSubscribeUser = (newUsers : Array<{ publicKey: string, authority: string, positions: string }>) : Promise<void> => {
     return new Promise((resolve, reject) => {
         subscribeToUserAccounts(newUsers).then(() => resolve())
     })
@@ -80,7 +80,7 @@ const workerAssignment : Map<string, { worker: string, publicKey: string, author
 
 // subscribe to all the users and check if they can be liquidated
 // users which are already subscribed to will be ignored
-const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string, authority: string }>) : Promise<any> => {
+const subscribeToUserAccounts = (programUserAccounts : Array<{ publicKey: string, authority: string, positions: string }>) : Promise<any> => {
     return new Promise((resolve, reject) => {
         Promise.all(
             programUserAccounts.filter(programUserAccount => {
@@ -243,7 +243,6 @@ const print = async () => {
     // reset workerData
     unrealizedPNLMap = new Map<string, string>();
     workerData = new Map<string, string>();
-
 }
 // map worker uuid to worker child process
 const workers : Map<string, ChildProcess> = new Map<string, ChildProcess>();
@@ -263,7 +262,7 @@ const getNewUsers = () => {
             setTimeout(() => {
                 if (fs.pathExistsSync('./storage/programUserAccounts')) {
                     let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
-                    loopSubscribeUser(JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string}>)
+                    loopSubscribeUser(JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>)
                 } else {
                     console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
                     workers.forEach(worker => worker.kill());
