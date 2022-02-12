@@ -33,11 +33,11 @@ $ yarn rebuild-win
 
 # both of these scripts should be run simultaneously, you can use pm2 to do that
 $ yarn getUsers
-$ yarn start
+$ yarn start (multiple process) | yarn single (single process)
 
 $ npm install -g pm2
 $ pm2 start yarn --name "driftUsers" -- getUsers
-$ pm2 start yarn --name "drift" -- start
+$ pm2 start yarn --name "drift" -- start | pm2 start yarn --name "drift" -- single
 $ pm2 list
 $ pm2 logs
 ```
@@ -91,18 +91,6 @@ const workerCount = 7;
 
 // split the amount of users up into equal amounts for each worker
 const splitUsersBetweenWorkers = true
-```
-
-```
-$ npm install
-
-
-# This next command will run the user getter, I split it away from the main program because I was running multiple instances of the bot.
-# This way it will only get the users once and each bot will check the storage file
-
-$ npm run getUsers
-
-$ npm run start
 ```
 
   
