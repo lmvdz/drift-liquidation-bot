@@ -17,13 +17,16 @@ import {
     ZERO,
     BN,
     PollingAccountSubscriber,
-    getUserAccountPublicKey} from '@drift-labs/sdk';
+    getUserAccountPublicKey,
+    Markets} from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
 import { ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 
 
 import { config } from 'dotenv';
+import { getLiquidationChart, getLiquidatorProfitTables, mapHistoryAccountToLiquidationsArray, updateLiquidatorMap } from './liqHistoryVisualizer.js';
+import { getTable } from './util/table.js';
 config({path: './.env.local'});
 
 // how many minutes before users will be fetched from storage
@@ -132,13 +135,13 @@ const checkForLiquidation = (clearingHouse: ClearingHouse, userMap: Map<string, 
         liquidate(clearingHouse, userMap, user, tpuConnection);
 }
 
-const checkBucket = (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection) => {
+const checkBucket = (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection, numUsersChecked: Array<number>, checkTime: Array<number>) => {
     const start = process.hrtime();
     const keys = bucket.getAllKeys();
     keys.forEach(async key => checkForLiquidation(clearingHouse, userMap, key, tpuConnection))
-    // numUsersChecked.push(keys.length)
+    numUsersChecked.push(keys.length)
     const time = process.hrtime(start);
-    // checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
+    checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
 }
 
 
@@ -333,10 +336,100 @@ const setupUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User
     }, 5000)
 }
 
-// prepare variables for liquidation loop
-// let intervalCount = 0
-// let numUsersChecked = new Array<number>();
-// let checkTime = new Array<number>();
+// used for the funding table
+interface MarketFunding {
+    marketId: number,
+    marketSymbol: string,
+    ts: number,
+    rate: string
+}
+
+const getFunding = (clearingHouse: ClearingHouse) => {
+    // reset the funding rate map, keep memory low
+    const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
+    let fundingTable = [];
+    const funding = clearingHouse.getFundingRateHistoryAccount().fundingRateRecords
+    funding.map(record => {
+        return {
+            marketId: record.marketIndex.toNumber(),
+            marketSymbol: Markets[record.marketIndex.toNumber()].symbol,
+            ts: record.ts.toNumber(),
+            rate: ((record.fundingRate.toNumber() / record.oraclePriceTwap.toNumber()) * (365.25 * 24) / 100).toFixed(2) + " %"
+        } as MarketFunding
+    }).sort((a, b) => {
+        return b.ts - a.ts
+    }).sort((a, b) => {
+        return a.marketId - b.marketId
+    }).forEach(record => {
+        if (!fundingRateMap.has(record.marketSymbol)) {
+            fundingRateMap.set(record.marketSymbol, new Array<MarketFunding>());
+        }
+        let marketFundingArray = fundingRateMap.get(record.marketSymbol);
+        marketFundingArray.push(record);
+        fundingRateMap.set(record.marketSymbol, marketFundingArray)
+    });
+
+    [...fundingRateMap.keys()].forEach(key => {
+        fundingTable.push(fundingRateMap.get(key)[0])
+    });
+
+    return fundingTable.map((lastFundingRate : MarketFunding) => {
+        return {
+            "Market": lastFundingRate.marketSymbol,
+            "Funding Rate (APR)": lastFundingRate.rate
+        }
+    });
+
+}
+
+const print = async (clearingHouse: ClearingHouse, data) => {
+    const userAccount = await clearingHouse.getUserAccountPublicKey()
+    const liquidatorMap = await updateLiquidatorMap(mapHistoryAccountToLiquidationsArray(clearingHouse.getLiquidationHistoryAccount()))
+    const liquidationChart = getLiquidationChart(liquidatorMap, [userAccount.toBase58()])
+    const liquidationTables = getLiquidatorProfitTables(liquidatorMap, [userAccount.toBase58()])
+    console.clear();
+    // Promise.all([...unrealizedPNLMap].sort((a : [string, string], b: [string, string]) => {
+    //     return parseInt(b[1]) - parseInt(a[1]);
+    // }).slice(0, 10).map(([pub, val]) => {
+    //     return new Promise((resolve) => {
+    //         clearingHouse.program.account.user.fetch(new PublicKey(pub)).then((userAccount) => {
+    //             clearingHouse.program.account.userPositions.fetch((userAccount as UserAccount).positions).then(userPositionsAccount => {
+    //                resolve(
+    //                    { 
+    //                        pub,
+    //                        positions: (userPositionsAccount as UserPositionsAccount).positions.filter((p : UserPosition) => p.baseAssetAmount.gt(ZERO) || p.baseAssetAmount.lt(ZERO)).map(p => {
+    //                         let z = {
+    //                             marketIndex: p.marketIndex.toNumber(),
+    //                             baseAssetAmount: convertBaseAssetAmountToNumber(p.baseAssetAmount),
+    //                             qouteAssetAmount: convertToNumber(p.quoteAssetAmount, QUOTE_PRECISION),
+    //                             baseAssetValue: convertToNumber(calculateBaseAssetValue(clearingHouse.getMarket(p.marketIndex.toNumber()), p), QUOTE_PRECISION),
+    //                             entryPrice: 0,
+    //                             profit: 0
+    //                         };
+    //                         z.entryPrice = (z.qouteAssetAmount/z.baseAssetAmount) * (z.baseAssetAmount < 0 ? -1 : 1)
+    //                         z.profit = (z.baseAssetValue - z.qouteAssetAmount) * (z.baseAssetAmount < 0 ? -1 : 1)
+    //                         return JSON.stringify(z);
+    //                     })
+    //                 }
+    //                )
+    //             })
+    //         })
+    //     })
+    // })).then(promises => {
+    //     console.log(promises);
+    // })
+    console.log([getTable([{
+                "User Count": parseFloat(data.userCount),
+                "High Prio": parseInt(data.prio.high),
+                "Medium Prio": parseInt(data.prio.medium),
+                "Low Prio": parseInt(data.prio.low),
+                // "Times Checked": parseFloat(data.intervalCount),
+                // "Total MS": parseFloat(data.time),
+                // "User Check MS": parseFloat(data.time) / (data.intervalCount *  (data.userCount)),
+                "Min Margin %": data.margin
+            }]), [getTable(getFunding(clearingHouse))], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
+}
+
 
 const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, tpuConnection: TpuConnection) => {
     if (fs.pathExistsSync('./storage/programUserAccounts')) {
@@ -355,7 +448,7 @@ const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, acco
 const main = async () => {
     const tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
     const clearingHouse = _.createClearingHouse(tpuConnection)
-    await clearingHouse.subscribe();
+    await clearingHouse.subscribe(['liquidationHistoryAccount', "fundingRateHistoryAccount"]);
 
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
@@ -369,6 +462,7 @@ const main = async () => {
     const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 30 * 1000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
+    getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection)
 
     setInterval(() => {
         getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection)
@@ -379,52 +473,58 @@ const main = async () => {
     }, (10 * 1000));
 
 
+
+    // prepare variables for liquidation loop
+    let intervalCount = 0
+    let numUsersChecked = new Array<number>();
+    let checkTime = new Array<number>();
+
+
     setInterval(() => {
-        checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection)
-        // intervalCount++;
+        checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection, numUsersChecked, checkTime)
+        intervalCount++;
     }, highPrioCheckUsersEveryMS);
 
     setInterval(() => {
-        checkBucket(clearingHouse, userMap, mediumPriorityBucket, tpuConnection)
-        // intervalCount++;
+        checkBucket(clearingHouse, userMap, mediumPriorityBucket, tpuConnection, numUsersChecked, checkTime)
+        intervalCount++;
     }, mediumPrioCheckUsersEveryMS);
 
     setInterval(() => {
-        checkBucket(clearingHouse, userMap, lowPriorityBucket, tpuConnection)
-        // intervalCount++;
+        checkBucket(clearingHouse, userMap, lowPriorityBucket, tpuConnection, numUsersChecked, checkTime)
+        intervalCount++;
     }, lowPrioCheckUsersEveryMS);
 
 
     setInterval(() => {
-        console.clear();
+        // console.clear();
         console.log(`total mem usage: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`)
-        console.log(`low: ${lowPriorityBucket.getAllKeys().length}, medium: ${mediumPriorityBucket.getAllKeys().length}, high: ${highPriorityBucket.getAllKeys().length}`)
+        // console.log(`low: ${lowPriorityBucket.getAllKeys().length}, medium: ${mediumPriorityBucket.getAllKeys().length}, high: ${highPriorityBucket.getAllKeys().length}`)
     }, 1000 * 5)
 
 
-    // setInterval(() => {
-    //     const x = {
-    //         ts: Date.now(),
-    //         data: {
-    //             userCount: userMap.size,
-    //             prio: {
-    //                 high: highPriorityBucket.getAllKeys().length,
-    //                 medium: mediumPriorityBucket.getAllKeys().length,
-    //                 low: lowPriorityBucket.getAllKeys().length
-    //             },
-    //             intervalCount: intervalCount,
-    //             checked: numUsersChecked,
-    //             margin: [...userMap.values()].map(u => u.marginRatio.toNumber()),
-    //             time: checkTime
-    //         }
-    //     }
+    setInterval(() => {
+        const margin = [...userMap.values()].map(u => u.marginRatio.toNumber())
+        const data = {
+            userCount: userMap.size,
+            prio: {
+                high: highPriorityBucket.getAllKeys().length,
+                medium: mediumPriorityBucket.getAllKeys().length,
+                low: lowPriorityBucket.getAllKeys().length
+            },
+            // intervalCount: intervalCount,
+            // checked: numUsersChecked,
+            margin: Math.min(...margin) / 100,
+            // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
+        }
 
+        print(clearingHouse, data).then(() => {
+            intervalCount = 0
+            numUsersChecked = new Array<number>();
+            checkTime = new Array<number>();
+        })
 
-    //     intervalCount = 0
-    //     numUsersChecked = new Array<number>();
-    //     checkTime = new Array<number>();
-
-    // }, 60 * 1000 * workerLoopTimeInMinutes);
+    }, 60 * 1000 * workerLoopTimeInMinutes);
 
 };
 
