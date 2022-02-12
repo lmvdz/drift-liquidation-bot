@@ -18,7 +18,6 @@ $ git clone git@github.com:lmvdz/protocol-v1.git
 $ cd protocol-v1
 $ git checkout barebones-polling-account
 $ cd ..
-$ cd ..
 
 # linux
 $ yarn rebuild
