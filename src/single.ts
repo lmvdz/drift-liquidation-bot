@@ -360,13 +360,13 @@ const main = async () => {
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
 
-    const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 60 * 1000);
+    const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 5 * 60 * 1000);
     accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-    const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 30 * 1000);
+    const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 60 * 1000);
     accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-    const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 10 * 1000);
+    const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 30 * 1000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
 
