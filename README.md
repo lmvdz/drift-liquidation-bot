@@ -1,6 +1,8 @@
 # Lmvdzande's Liquidation Bot  
   
-### This branch is used to test splitting the bot into threaded processes for best performance of the bot  
+### This branch was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.
+### This branch includes TpuClient.ts (ported from solana rust lib) to send liquidation tx's straight to Tpu Leaders.
+### This branch attemps to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.
 
 ### the protocol-v1 is my fork [lmvdz/protocol-v1](https://github.com/lmvdz/protocol-v1/tree/barebones-polling-account)
 
@@ -33,6 +35,7 @@ $ yarn rebuild-win
 
 # both of these scripts should be run simultaneously, you can use pm2 to do that
 $ yarn getUsers
+# Currently better to run single
 $ yarn start (multiple process) | yarn single (single process)
 
 $ npm install -g pm2
@@ -44,7 +47,7 @@ $ pm2 logs
 
 (multiple process)
 
-By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript. 
+By using child_process to split the work of ( getting users / subscribing / polling ) and (checking for liquidation of users based on position data) the bot is able to produce less bottlenecking a single process. This can allow multiple processes to run simultaneously. This costs significantly more RAM.
 
 
 (single process)
