@@ -159,7 +159,8 @@ const liquidate = (clearingHouse: ClearingHouse, userMap: Map<string, User>, use
         tx.recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
         tx.feePayer = clearingHouse.wallet.publicKey
         tx = await clearingHouse.wallet.signTransaction(tx)
-        resolve(bs58.encode((await tpuConnection.tpuClient.sendRawTransaction(tx.serialize()))));
+        tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
+        resolve(bs58.encode(tx.signature));
     })
 }
 
