@@ -39,9 +39,9 @@ const workerLoopTimeInMinutes = 1
 
 
 // check priority every X ms
-const highPrioCheckUsersEveryMS = 5
-const mediumPrioCheckUsersEveryMS = 1000
-const lowPrioCheckUsersEveryMS = 5 * 1000
+const highPrioCheckUsersEveryMS = 5000
+const mediumPrioCheckUsersEveryMS = 30000
+const lowPrioCheckUsersEveryMS = 60000
 
 
 // the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
@@ -149,8 +149,8 @@ const wrapInTx = (instruction: TransactionInstruction) : Transaction  => {
 	return new Transaction().add(instruction);
 }
 
-const liquidate = (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection) : Promise<string> => {
-    return new Promise(async (resolve, reject) => {
+const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection) : Promise<string> => {
+    try {
         let instruction = user.liquidationInstruction
         if (instruction === undefined) {
             instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user)
@@ -160,8 +160,11 @@ const liquidate = (clearingHouse: ClearingHouse, userMap: Map<string, User>, use
         tx.feePayer = clearingHouse.wallet.publicKey
         tx = await clearingHouse.wallet.signTransaction(tx)
         tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
-        resolve(bs58.encode(tx.signature));
-    })
+        return (bs58.encode(tx.signature));
+    } catch (error) {
+        console.error(error);
+    }
+    
 }
 
 const prepareUserLiquidationIX = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User) : Promise<TransactionInstruction> => {
