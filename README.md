@@ -1,8 +1,10 @@
 # Lmvdzande's Liquidation Bot  
   
-### This branch was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.
-### This branch includes TpuClient.ts (ported from solana rust lib) to send liquidation tx's straight to Tpu Leaders.
-### This branch attemps to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.
+### This branch 
+> was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.
+> includes TpuClient.ts (ported from solana rust lib) to send liquidation tx's straight to Tpu Leaders.
+> splits users into prioritized buckets based on margin ratio
+> attemps to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.
 
 ### the protocol-v1 is my fork [lmvdz/protocol-v1](https://github.com/lmvdz/protocol-v1/tree/barebones-polling-account)
 
@@ -111,7 +113,7 @@ Users with margin_ratio' closer to being partially liquidated are assigned to a 
 
 If you have questions, find me in the Drift Protocol discord: https://discord.gg/uDNCH9QC `@lmvdzande#0001`
 
-Next two pictures are from `yarn start`
+Next two pictures are from an older version of `yarn start`
 
 ![image](https://user-images.githubusercontent.com/2179775/147393973-71ee8d39-6935-4414-94c4-a5d20f135698.png)
 ![image](https://user-images.githubusercontent.com/2179775/147394054-b855484c-f086-4538-82ea-f9cfed6bbae0.png)
