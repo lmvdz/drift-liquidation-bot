@@ -42,12 +42,15 @@ $ pm2 list
 $ pm2 logs
 ```
 
-By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript.  
+(multiple process)
 
-Currently the bot is hardcoded to run 80 workers at a time.  
-Uses a lot of CPU at the start!  
-CPU usage falls off after all the users are loaded/subscribed  
-More workers = More RAM!!
+By using child_process to split the work of (getting users / subscribing) and (checking for liquidation of users based on position data)  the bot is able to produce less bottlenecking of the single threaded nature of javascript. 
+
+
+(single process)
+
+With GenesysGo adding rate limits to their previously unlimited TPS RPC, I was forced to revert back to a single process.
+Restrictions for GG currently is 10 tps per IP.
 
   
 Create a `.env.local` file in the root of the project.  
@@ -105,8 +108,14 @@ Users with margin_ratio' closer to being partially liquidated are assigned to a 
 
 If you have questions, find me in the Drift Protocol discord: https://discord.gg/uDNCH9QC `@lmvdzande#0001`
 
+Next two pictures are from `yarn start`
+
 ![image](https://user-images.githubusercontent.com/2179775/147393973-71ee8d39-6935-4414-94c4-a5d20f135698.png)
 ![image](https://user-images.githubusercontent.com/2179775/147394054-b855484c-f086-4538-82ea-f9cfed6bbae0.png)
+
+Next picture is from `yarn single`
+
+![image](https://user-images.githubusercontent.com/2179775/153732700-00503025-1a01-4163-8568-697869e826da.png)
 
 
 
