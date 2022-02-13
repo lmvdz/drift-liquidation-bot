@@ -21,12 +21,13 @@ import {
     Markets} from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
-import { ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { AccountMeta, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 
 
 import { config } from 'dotenv';
 import { getLiquidationChart, getLiquidatorProfitTables, mapHistoryAccountToLiquidationsArray, updateLiquidatorMap } from './liqHistoryVisualizer.js';
 import { getTable } from './util/table.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 config({path: './.env.local'});
 
 // how many minutes before users will be fetched from storage
@@ -39,16 +40,16 @@ const workerLoopTimeInMinutes = 1
 
 
 // check priority every X ms
-const highPrioCheckUsersEveryMS = 5000
-const mediumPrioCheckUsersEveryMS = 30000
-const lowPrioCheckUsersEveryMS = 60000
+const highPrioCheckUsersEveryMS = 500
 
 
-// the slippage of partial liquidation as a percentage --- 1 = 1% = 0.01 when margin ratio reaches 625 * 1.12 = (700)
+// the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 0.8
+const partialLiquidationSlippage = 0.5
 
 const slipLiq = new BN(PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100)));
+
+console.log(slipLiq.toNumber())
 
 // the margin ratio which determines which priority bucket the user will be a part of 
 const highPriorityMarginRatio = 1000
@@ -127,18 +128,19 @@ const getMarginRatio = (clearingHouse : ClearingHouse, user: User) => {
     ).mul(TEN_THOUSAND).div(totalPositionValue);
 }
 
-
-const checkForLiquidation = (clearingHouse: ClearingHouse, userMap: Map<string, User>, pub : string, tpuConnection: TpuConnection) => {    
+const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, pub : string, tpuConnection: TpuConnection, recentBlockhash: string, liquidatorAccountPublicKey: PublicKey) => {    
     const user = userMap.get(pub)
     user.marginRatio = getMarginRatio(clearingHouse, user);
-    if (user.marginRatio.lte(slipLiq))
-        liquidate(clearingHouse, userMap, user, tpuConnection);
+    if (user.marginRatio.lte(slipLiq)) {
+        liquidate(clearingHouse, userMap, user, tpuConnection, recentBlockhash, liquidatorAccountPublicKey);
+    }
 }
 
-const checkBucket = (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection, numUsersChecked: Array<number>, checkTime: Array<number>) => {
+const checkBucket = async (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection, numUsersChecked: Array<number>, checkTime: Array<number>, liquidatorAccountPublicKey: PublicKey) => {
     const start = process.hrtime();
     const keys = bucket.getAllKeys();
-    keys.forEach(async key => checkForLiquidation(clearingHouse, userMap, key, tpuConnection))
+    const recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
+    keys.forEach(async (key) => checkForLiquidation(clearingHouse, userMap, key, tpuConnection, recentBlockhash, liquidatorAccountPublicKey))
     numUsersChecked.push(keys.length)
     const time = process.hrtime(start);
     checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
@@ -149,39 +151,140 @@ const wrapInTx = (instruction: TransactionInstruction) : Transaction  => {
 	return new Transaction().add(instruction);
 }
 
-const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection) : Promise<string> => {
-    try {
-        let instruction = user.liquidationInstruction
-        if (instruction === undefined) {
-            instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user)
-        }
-        let tx = wrapInTx(instruction)
-        tx.recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
-        tx.feePayer = clearingHouse.wallet.publicKey
-        tx = await clearingHouse.wallet.signTransaction(tx)
-        tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
-        return (bs58.encode(tx.signature));
-    } catch (error) {
-        console.error(error);
+const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection, recentBlockhash: string, liquidatorAccountPublicKey: PublicKey) : Promise<void> => {
+    let instruction = user.liquidationInstruction
+    if (instruction === undefined) {
+        instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
     }
+    let tx = wrapInTx(instruction)
+    tx.recentBlockhash = recentBlockhash;
+    tx.feePayer = clearingHouse.wallet.publicKey
+    tx = await clearingHouse.wallet.signTransaction(tx)
+    const txId = await tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
+    console.log(txId);
     
 }
 
-const prepareUserLiquidationIX = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User) : Promise<TransactionInstruction> => {
+const prepareUserLiquidationIX = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, liquidatorAccountPublicKey: PublicKey) : Promise<TransactionInstruction> => {
     if (user.userAccountPublicKey === undefined || user.userAccountPublicKey === null) {
         user.userAccountPublicKey = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
         userMap.set(user.publicKey, user);
     }
-    const liquidationInstruction = await prepareLiquidationIX(clearingHouse, userMap, user.publicKey, user.userAccountPublicKey);
+    const liquidationInstruction = await getLiquidateIx(clearingHouse, user, liquidatorAccountPublicKey);
+    userMap.set(user.publicKey, { ...user, liquidationInstruction });
     return liquidationInstruction;
 }
 
-const prepareLiquidationIX = (clearingHouse: ClearingHouse, userMap: Map<string, User>, userPub: string, userAccountPub : PublicKey) : Promise<TransactionInstruction> => {
+const getLiquidateIx = (
+    clearingHouse: ClearingHouse,
+    user: User,
+    liquidatorAccountPublicKey: PublicKey
+): Promise<TransactionInstruction>  => {
     return new Promise((resolve) => {
-        clearingHouse.getLiquidateIx(userAccountPub).then( (instruction: TransactionInstruction) => {
-            // console.error(instruction)
-            userMap.set(userPub, { ...userMap.get(userPub), liquidationInstruction: instruction });
-            resolve(instruction);
+        const liquidateeUserAccountPublicKey = user.userAccountPublicKey;
+        const liquidateeUserAccount = user.accountData
+        const liquidateePositions = user.positionsAccountData
+        const markets = clearingHouse.getMarketsAccount();
+        const remainingAccounts = [];
+        for (const position of liquidateePositions.positions) {
+            if (!position.baseAssetAmount.eq(new BN(0))) {
+                const market = markets.markets[position.marketIndex.toNumber()];
+                remainingAccounts.push({
+                    pubkey: market.amm.oracle,
+                    isWritable: false,
+                    isSigner: false,
+                });
+            }
+        }
+
+        // clearingHouse.getLiquidateIx(user.userAccountPublicKey).then((regularTxIx) => {
+            
+        // })
+        const state = clearingHouse.getStateAccount();
+        clearingHouse.getStatePublicKey().then(statePublicKey => {
+            const keys = [
+                {
+                    pubkey: statePublicKey, 
+                    "isWritable": false,
+                    "isSigner": false
+                },
+                {
+                    pubkey: clearingHouse.wallet.publicKey, 
+                    "isWritable": false,
+                    "isSigner": true
+                },
+                {
+                    pubkey: liquidatorAccountPublicKey,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: liquidateeUserAccountPublicKey, 
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.collateralVault,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.collateralVaultAuthority,
+                    "isWritable": false,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.insuranceVault,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.insuranceVaultAuthority,
+                    "isWritable": false,
+                    "isSigner": false
+                },
+                {
+                    pubkey: TOKEN_PROGRAM_ID,
+                    "isWritable": false,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.markets,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: liquidateeUserAccount.positions,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.tradeHistory,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.liquidationHistory,
+                    "isWritable": true,
+                    "isSigner": false
+                },
+                {
+                    pubkey: state.fundingPaymentHistory,
+                    "isWritable": true,
+                    "isSigner": false
+                }
+            ] as AccountMeta[]
+            const txIx = new TransactionInstruction({
+                data: clearingHouse.program.coder.instruction.encode('liquidate', []),
+                programId: clearingHouse.program.programId,
+                keys: keys.concat(remainingAccounts)
+            });
+            // console.log(txIx);
+            // txIx.keys.forEach(k => console.log(k.pubkey.toBase58()))
+            // console.log(regularTxIx);
+            // regularTxIx.keys.forEach(k => console.log(k.pubkey.toBase58()))
+            // process.exit()
+            resolve(txIx)
         })
     })
 }
@@ -197,7 +300,7 @@ const getPrio = (user : User) => {
     return (user.marginRatio.lte(new BN(highPriorityMarginRatio)) ? Priority.high : (user.marginRatio.lte(new BN(mediumPriorityMarginRatio)) ? Priority.medium : Priority.low));
 }
 
-const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map< Priority, PollingAccountSubscriber>, user: User) => {
+const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map< Priority, PollingAccountSubscriber>, user: User, liquidatorAccountPublicKey: PublicKey) => {
     user.marginRatio = getMarginRatio(clearingHouse, user);
     let currentPrio = user.prio;
     let newPrio = getPrio(user);
@@ -211,7 +314,7 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
             // console.log('updated user', 'account data', user.publicKey)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
-            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData);
+            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, async (data: UserPositionsAccount) => {
@@ -220,16 +323,16 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
             let oldData = userMap.get(user.publicKey);
             let newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(clearingHouse, newData);
-            // newData.liquidationInstruction = await prepareUserLiquidationIX(newData);
+            newData.liquidationInstruction = await prepareUserLiquidationIX(clearingHouse, userMap, newData, liquidatorAccountPublicKey);
             userMap.set(user.publicKey, newData);
-            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData);
+            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
     }
 }
 
-const sortUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>) => {
-    [...userMap.values()].forEach(async user => sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user));
+const sortUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, liquidatorAccountPublicKey: PublicKey) => {
+    [...userMap.values()].forEach(async user => sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey));
 }
 
 function sleep(milliseconds) {  
@@ -240,7 +343,7 @@ function chunkArray(array : Array<any>, chunk_size : number) : Array<any> {
     return new Array(Math.ceil(array.length / chunk_size)).fill(null).map((_, index) => index * chunk_size).map(begin => array.slice(begin, begin + chunk_size));
 } 
 
-const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, users: Array<User>, tpuConnection: TpuConnection) => {
+const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, users: Array<User>, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     let usersSetup = []
 
     usersSetup = chunkArray(await Promise.all(users.map(async (u, index) => {
@@ -313,8 +416,11 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                     }
 
                     user.marginRatio = getMarginRatio(clearingHouse, user);
+                    setTimeout(() => {
+                        prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
+                    }, 1000)
                     userMap.set(user.publicKey, user);
-                    await sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user)
+                    await sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey)
                 }))
             });
             
@@ -326,14 +432,14 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
 
 let usersToSetup = [];
 let setupUsersTimeout = null
-const setupUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, u : User, tpuConnection: TpuConnection) => {
+const setupUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, u : User, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     if (!usersToSetup.includes(u)) {
         usersToSetup.push(u);
     }
     clearTimeout(setupUsersTimeout)
     setupUsersTimeout = setTimeout(() => {
         console.log('setting up users');
-        setupUsers(clearingHouse, userMap, accountSubscriberBucketMap, usersToSetup, tpuConnection).then(() => {
+        setupUsers(clearingHouse, userMap, accountSubscriberBucketMap, usersToSetup, tpuConnection, liquidatorAccountPublicKey).then(() => {
             usersToSetup = [];
             [...accountSubscriberBucketMap.keys()].forEach(key => accountSubscriberBucketMap.get(key).subscribe());
         });
@@ -386,8 +492,8 @@ const getFunding = (clearingHouse: ClearingHouse) => {
 
 }
 
-const print = async (clearingHouse: ClearingHouse, data) => {
-    const userAccount = await clearingHouse.getUserAccountPublicKey()
+
+const print = async (clearingHouse: ClearingHouse, data : any, userAccount: PublicKey) => {
     const liquidatorMap = await updateLiquidatorMap(mapHistoryAccountToLiquidationsArray(clearingHouse.getLiquidationHistoryAccount()))
     const liquidationChart = getLiquidationChart(liquidatorMap, [userAccount.toBase58()])
     const liquidationTables = getLiquidatorProfitTables(liquidatorMap, [userAccount.toBase58()])
@@ -435,12 +541,12 @@ const print = async (clearingHouse: ClearingHouse, data) => {
 }
 
 
-const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, tpuConnection: TpuConnection) => {
+const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     if (fs.pathExistsSync('./storage/programUserAccounts')) {
         let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
         (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>).forEach(async user => {
             if (!userMap.has(user.publicKey))
-                setupUser(clearingHouse, userMap, accountSubscriberBucketMap, user as User, tpuConnection)
+                setupUser(clearingHouse, userMap, accountSubscriberBucketMap, user as User, tpuConnection, liquidatorAccountPublicKey)
         })
     } else {
         console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
@@ -453,6 +559,7 @@ const main = async () => {
     const tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
     const clearingHouse = _.createClearingHouse(tpuConnection)
     await clearingHouse.subscribe(['liquidationHistoryAccount', "fundingRateHistoryAccount"]);
+    const liquidatorAccountPublicKey = await clearingHouse.getUserAccountPublicKey()
 
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
@@ -466,14 +573,14 @@ const main = async () => {
     const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 30 * 1000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
-    getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection)
+    getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
 
     setInterval(() => {
-        getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection)
+        getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
     }, 60 * 1000)
 
     setInterval(() => {
-        sortUsers(clearingHouse, userMap, accountSubscriberBucketMap);
+        sortUsers(clearingHouse, userMap, accountSubscriberBucketMap, liquidatorAccountPublicKey);
     }, (10 * 1000));
 
 
@@ -485,19 +592,9 @@ const main = async () => {
 
 
     setInterval(() => {
-        checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection, numUsersChecked, checkTime)
+        checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection, numUsersChecked, checkTime, liquidatorAccountPublicKey)
         intervalCount++;
     }, highPrioCheckUsersEveryMS);
-
-    setInterval(() => {
-        checkBucket(clearingHouse, userMap, mediumPriorityBucket, tpuConnection, numUsersChecked, checkTime)
-        intervalCount++;
-    }, mediumPrioCheckUsersEveryMS);
-
-    setInterval(() => {
-        checkBucket(clearingHouse, userMap, lowPriorityBucket, tpuConnection, numUsersChecked, checkTime)
-        intervalCount++;
-    }, lowPrioCheckUsersEveryMS);
 
 
     setInterval(() => {
@@ -522,7 +619,7 @@ const main = async () => {
             // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
         }
 
-        print(clearingHouse, data).then(() => {
+        print(clearingHouse, data, liquidatorAccountPublicKey).then(() => {
             intervalCount = 0
             numUsersChecked = new Array<number>();
             checkTime = new Array<number>();
