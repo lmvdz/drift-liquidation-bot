@@ -1,10 +1,10 @@
 # Lmvdzande's Liquidation Bot  
   
 ### This branch 
-> was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.  
-> includes TpuClient.ts (ported from solana rust lib) to send liquidation tx's straight to Tpu Leaders.  
-> splits users into prioritized buckets based on margin ratio.  
-> attemps to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.  
+> Was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.  
+> Includes TpuClient.ts (ported from solana rust lib) to send liquidation tx's straight to Tpu Leaders.  
+> Splits users into prioritized buckets based on margin ratio.  
+> Attempts to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.  
 
 ### the protocol-v1 is my fork [lmvdz/protocol-v1](https://github.com/lmvdz/protocol-v1/tree/barebones-polling-account)
 
