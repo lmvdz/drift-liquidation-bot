@@ -1,4 +1,4 @@
-# Lmvdzande's Liquidation Bot  
+# Lmvdzande's Drift Liquidation Bot  
   
 ### This branch 
 > Was used to test splitting the bot into threaded processes for best performance of the bot, but now has a singular process option as well.  
