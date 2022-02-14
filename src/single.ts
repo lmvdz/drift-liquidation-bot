@@ -310,7 +310,7 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
         userMap.set(user.publicKey, { ...user, prio: newPrio})
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
-            console.log('updated user', 'account data', user.publicKey)
+            // console.log('updated user', 'account data', user.publicKey)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
@@ -318,7 +318,7 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
             // console.log(data);
-            console.log('updated user', 'positions data', user.publicKey)
+            // console.log('updated user', 'positions data', user.publicKey)
             let oldData = userMap.get(user.publicKey);
             let newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(clearingHouse, newData);
