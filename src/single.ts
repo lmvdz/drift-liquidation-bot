@@ -309,21 +309,21 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
 
         userMap.set(user.publicKey, { ...user, prio: newPrio})
 
-        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, async (data: UserAccount) => {
-            // console.log('updated user', 'account data', user.publicKey)
+        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
+            console.log('updated user', 'account data', user.publicKey)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
-        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, async (data: UserPositionsAccount) => {
+        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
             // console.log(data);
-            // console.log('updated user', 'positions data', user.publicKey)
+            console.log('updated user', 'positions data', user.publicKey)
             let oldData = userMap.get(user.publicKey);
             let newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(clearingHouse, newData);
-            newData.liquidationInstruction = await prepareUserLiquidationIX(clearingHouse, userMap, newData, liquidatorAccountPublicKey);
             userMap.set(user.publicKey, newData);
+            prepareUserLiquidationIX(clearingHouse, userMap, newData, liquidatorAccountPublicKey);
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
@@ -342,6 +342,10 @@ function chunkArray(array : Array<any>, chunk_size : number) : Array<any> {
     return new Array(Math.ceil(array.length / chunk_size)).fill(null).map((_, index) => index * chunk_size).map(begin => array.slice(begin, begin + chunk_size));
 } 
 
+function flatDeep(arr : Array<any>, d = 1) : Array<any> {
+    return d > 0 ? arr.reduce((acc, val) => acc.concat(Array.isArray(val) ? flatDeep(val, d - 1) : val), []) : arr.slice();
+}
+
 const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, users: Array<User>, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     let usersSetup = []
 
@@ -352,79 +356,122 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
         }
     })), 100)
 
-    await Promise.all(usersSetup.map(async (userArray, index) => {
-        const userAccountKeys = userArray.map(u => u.publicKey)
-        const userPositions = userArray.map(u => u.positions)
-        sleep((index + 1) * 2000).then(() => {
-            //@ts-ignore
-            axios.post(tpuConnection._rpcEndpoint, [{
-                jsonrpc: "2.0",
-                id: "1",
-                method: "getMultipleAccounts",
-                params: [
-                    userAccountKeys,
-                  {
-                    commitment: "processed",
-                  },
-                ],
-            }, {
-                jsonrpc: "2.0",
-                id: "1",
-                method: "getMultipleAccounts",
-                params: [
-                    userPositions,
-                  {
-                    commitment: "processed",
-                  },
-                ],
-            }]).then(response => {
-                const userAccounts = response.data[0]
-                const userPositionAccounts = response.data[1]
+    const data = flatDeep(usersSetup.map(chunk => ([
+        {
+            jsonrpc: "2.0",
+            id: "1",
+            method: "getMultipleAccounts",
+            params: [
+                chunk.map(u => u.publicKey),
+                {
+                commitment: "processed",
+                },
+            ]
+        }, 
+        {
+            jsonrpc: "2.0",
+            id: "1",
+            method: "getMultipleAccounts",
+            params: [
+                chunk.map(u => u.positions),
+                {
+                commitment: "processed",
+                },
+            ]
+        }
+    ])), Infinity)
+    const chunkedData = chunkArray(data, 10);
+    console.log(chunkedData.length);
+    const chunkedRequests = chunkArray(chunkedData, 10);
+    console.log(chunkedRequests.length);
+    
+    const responses = flatDeep(await Promise.all(chunkedRequests.map((request, index) => 
+            new Promise((resolve) => {
+                setTimeout(async () => {
+                    //@ts-ignore
+                    resolve(flatDeep(await Promise.all(request.map( async dataChunk => (await axios.post(tpuConnection._rpcEndpoint, dataChunk)).data )), Infinity))
+                }, index * 1.5 * 1000)
+            })
+        )), 
+        Infinity
+    )
 
-                const mappedUserAccounts = userAccounts.result.value.map(u =>  {
-                    const raw: string = u.data[0];
-                    const dataType = u.data[1]
-                    const buffer = Buffer.from(raw, dataType);
-                    return clearingHouse.program.account['user'].coder.accounts.decode(
-                        // @ts-ignore
-                        clearingHouse.program.account['user']._idlAccount.name, 
-                        buffer
-                    ) as UserAccount
-                })
-                
-                const mappedUserPositionAccounts = userPositionAccounts.result.value.map(p => {
-                    const raw: string = p.data[0];
-                    const dataType = p.data[1]
-                    const buffer = Buffer.from(raw, dataType);
-                    return clearingHouse.program.account[
-                        'userPositions'
-                    ].coder.accounts.decode(
-                        // @ts-ignore
-                        clearingHouse.program.account['userPositions']._idlAccount.name,
-                        buffer
-                    ) as UserPositionsAccount
-                })
-                
+    for(let x = 0; x < responses.length/2; x++) {
+        const userAccounts = responses[x*2]
+        const userPositionAccounts = responses[(x*2) + 1]
 
-                Promise.all(userArray.map(async (u, i) => {
-                    let user = {
-                        ...u,
-                        accountData: mappedUserAccounts[i],
-                        positionsAccountData: mappedUserPositionAccounts[i],
-                        positions: mappedUserAccounts[i].positions.toBase58()
-                    }
-
-                    user.marginRatio = getMarginRatio(clearingHouse, user);
-                    setTimeout(() => {
-                        prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
-                    }, 1000 * i)
-                    userMap.set(user.publicKey, user);
-                    await sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey)
-                }))
-            });
-            
+        const mappedUserAccounts = userAccounts.result.value.map(u =>  {
+            const raw: string = u.data[0];
+            const dataType = u.data[1]
+            const buffer = Buffer.from(raw, dataType);
+            return clearingHouse.program.account['user'].coder.accounts.decode(
+                // @ts-ignore
+                clearingHouse.program.account['user']._idlAccount.name, 
+                buffer
+            ) as UserAccount
         })
-    }))
+        
+        const mappedUserPositionAccounts = userPositionAccounts.result.value.map(p => {
+            const raw: string = p.data[0];
+            const dataType = p.data[1]
+            const buffer = Buffer.from(raw, dataType);
+            return clearingHouse.program.account[
+                'userPositions'
+            ].coder.accounts.decode(
+                // @ts-ignore
+                clearingHouse.program.account['userPositions']._idlAccount.name,
+                buffer
+            ) as UserPositionsAccount
+        })
+        
+
+        Promise.all(usersSetup[x].map((u, i) => {
+            let user = {
+                ...u,
+                accountData: mappedUserAccounts[i],
+                positionsAccountData: mappedUserPositionAccounts[i],
+                positions: mappedUserAccounts[i].positions.toBase58()
+            }
+
+            user.marginRatio = getMarginRatio(clearingHouse, user);
+            setTimeout(() => {
+                prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
+            }, 1000 * i)
+            userMap.set(user.publicKey, user);
+            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey)
+        }))
+    }
+    // await Promise.all(usersSetup.map(async (userArray, index) => {
+    //     const userAccountKeys = userArray.map(u => u.publicKey)
+    //     const userPositions = userArray.map(u => u.positions)
+    //     sleep((index + 1) * 2000).then(() => {
+    //         //@ts-ignore
+    //         axios.post(tpuConnection._rpcEndpoint, [{
+    //             jsonrpc: "2.0",
+    //             id: "1",
+    //             method: "getMultipleAccounts",
+    //             params: [
+    //                 userAccountKeys,
+    //               {
+    //                 commitment: "processed",
+    //               },
+    //             ],
+    //         }, {
+    //             jsonrpc: "2.0",
+    //             id: "1",
+    //             method: "getMultipleAccounts",
+    //             params: [
+    //                 userPositions,
+    //               {
+    //                 commitment: "processed",
+    //               },
+    //             ],
+    //         }]).then(response => {
+                
+    //         });
+            
+    //     })
+    // }))
 }
 
 
@@ -438,11 +485,14 @@ const setupUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User
     clearTimeout(setupUsersTimeout)
     setupUsersTimeout = setTimeout(() => {
         console.log('setting up users');
+        // const startTime = process.hrtime();
         setupUsers(clearingHouse, userMap, accountSubscriberBucketMap, usersToSetup, tpuConnection, liquidatorAccountPublicKey).then(() => {
             usersToSetup = [];
+            // const endTime = process.hrtime(startTime);
+            // console.log('took ' + endTime[0] * 1000  + ' ms');
             [...accountSubscriberBucketMap.keys()].forEach(key => accountSubscriberBucketMap.get(key).subscribe());
         });
-    }, 5000)
+    }, 2000)
 }
 
 // used for the funding table
@@ -565,24 +615,30 @@ const main = async () => {
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
 
-    const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 5 * 60 * 1000);
+    // poll low priority accounts every 5 minutes
+    const lowPriorityBucket = new PollingAccountSubscriber('low prio', clearingHouse.program, 0, 60 * 1000);
     accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-    const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 60 * 1000);
+    // poll medium priority accounts every minute
+    const mediumPriorityBucket = new PollingAccountSubscriber('medium prio',clearingHouse.program, 0, 30 * 1000);
     accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-    const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, 0, 30 * 1000);
+    const highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 1000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
     getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
 
-    setInterval(() => {
-        getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
-    }, 60 * 1000)
-
+    setTimeout(() => {
+        setInterval(() => {
+            getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
+        }, 60 * 1000)
+    }, 30 * 1000)
+    
     setInterval(() => {
         sortUsers(clearingHouse, userMap, accountSubscriberBucketMap, liquidatorAccountPublicKey);
-    }, (10 * 1000));
+    }, (60 * 1000));
+
+    
 
 
 
@@ -592,6 +648,7 @@ const main = async () => {
     let checkTime = new Array<number>();
 
 
+    // get blockhashes of multiple rpcs every second
     setInterval(async () => {
         recentBlockhashes = new Set<string>([
             (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
@@ -599,43 +656,46 @@ const main = async () => {
             (await mainnetRPC.getRecentBlockhash()).blockhash,
             (await rpcPool.getRecentBlockhash()).blockhash
         ]);
-    }, 500)
+    }, 1000)
 
+    // check the highPriorityBucket every x seconds
     setInterval(() => {
         checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection, numUsersChecked, checkTime, liquidatorAccountPublicKey)
         intervalCount++;
     }, highPrioCheckUsersEveryMS);
 
 
+    // print the memory usage every 5 seconds
     setInterval(() => {
         // console.clear();
         console.log(`total mem usage: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`)
         // console.log(`low: ${lowPriorityBucket.getAllKeys().length}, medium: ${mediumPriorityBucket.getAllKeys().length}, high: ${highPriorityBucket.getAllKeys().length}`)
-    }, 1000 * 5)
+    }, 10 * 1000)
 
 
-    setInterval(() => {
-        const margin = [...userMap.values()].map(u => u.marginRatio.toNumber())
-        const data = {
-            userCount: userMap.size,
-            prio: {
-                high: highPriorityBucket.getAllKeys().length,
-                medium: mediumPriorityBucket.getAllKeys().length,
-                low: lowPriorityBucket.getAllKeys().length
-            },
-            // intervalCount: intervalCount,
-            // checked: numUsersChecked,
-            margin: Math.min(...margin) / 100,
-            // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
-        }
+    // print out the tables every x minutes
+    // setInterval(() => {
+    //     const margin = [...userMap.values()].map(u => u.marginRatio.toNumber())
+    //     const data = {
+    //         userCount: userMap.size,
+    //         prio: {
+    //             high: highPriorityBucket.getAllKeys().length,
+    //             medium: mediumPriorityBucket.getAllKeys().length,
+    //             low: lowPriorityBucket.getAllKeys().length
+    //         },
+    //         // intervalCount: intervalCount,
+    //         // checked: numUsersChecked,
+    //         margin: Math.min(...margin) / 100,
+    //         // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
+    //     }
 
-        print(clearingHouse, data, liquidatorAccountPublicKey).then(() => {
-            intervalCount = 0
-            numUsersChecked = new Array<number>();
-            checkTime = new Array<number>();
-        })
+    //     print(clearingHouse, data, liquidatorAccountPublicKey).then(() => {
+    //         intervalCount = 0
+    //         numUsersChecked = new Array<number>();
+    //         checkTime = new Array<number>();
+    //     })
 
-    }, 60 * 1000 * workerLoopTimeInMinutes);
+    // }, 60 * 1000 * workerLoopTimeInMinutes);
 
 };
 

@@ -338,22 +338,25 @@ const sortUser = async (user: User) => {
     user.marginRatio = getMarginRatio(user);
     let currentPrio = user.prio;
     let newPrio = getPrio(user);
+    console.log(currentPrio, newPrio)
     if (currentPrio !== newPrio) {
-        if (currentPrio !== undefined)
+        if (currentPrio !== undefined) 
         accountSubscriberBucketMap.get(currentPrio).removeAccountsToPoll(user.publicKey);
 
         userMap.set(user.publicKey, { ...user, prio: newPrio})
 
-        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, async (data: UserAccount) => {
-            // console.log('updated user', 'account data', user.publicKey)
+        const newPrioBucket = accountSubscriberBucketMap.get(newPrio);
+
+        newPrioBucket.addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
+            console.log('updated user', 'account data', user.publicKey, newPrio)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
             sortUser(newData);
         });
 
-        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, async (data: UserPositionsAccount) => {
+        newPrioBucket.addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
             // console.log(data);
-            // console.log('updated user', 'positions data', user.publicKey)
+            console.log('updated user', 'positions data', user.publicKey, newPrio)
             let oldData = userMap.get(user.publicKey);
             let newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(newData);
@@ -489,13 +492,13 @@ process.on('message', (data : MessageData) => {
 
 clearingHouse = _.createClearingHouse(workerConnection)
 
-const lowPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, workerIndex, 60 * 1000);
+const lowPriorityBucket = new PollingAccountSubscriber('low prio', clearingHouse.program, workerIndex, 60 * 1000);
 accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-const mediumPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, workerIndex, 30 * 1000);
+const mediumPriorityBucket = new PollingAccountSubscriber('medium prio',clearingHouse.program, workerIndex, 30 * 1000);
 accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-const highPriorityBucket = new PollingAccountSubscriber(clearingHouse.program, workerIndex, 10 * 1000);
+const highPriorityBucket = new PollingAccountSubscriber('high prio',clearingHouse.program, workerIndex, 10 * 1000);
 accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
 
 const subAndStartWorker = () => {
