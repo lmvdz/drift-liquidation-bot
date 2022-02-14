@@ -21,7 +21,7 @@ import {
     Markets} from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
-import { AccountMeta, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 
 
 import { config } from 'dotenv';
@@ -40,7 +40,7 @@ const workerLoopTimeInMinutes = 1
 
 
 // check priority every X ms
-const highPrioCheckUsersEveryMS = 500
+const highPrioCheckUsersEveryMS = 5
 
 
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
@@ -128,19 +128,18 @@ const getMarginRatio = (clearingHouse : ClearingHouse, user: User) => {
     ).mul(TEN_THOUSAND).div(totalPositionValue);
 }
 
-const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, pub : string, tpuConnection: TpuConnection, recentBlockhash: string, liquidatorAccountPublicKey: PublicKey) => {    
+const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, pub : string, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {    
     const user = userMap.get(pub)
     user.marginRatio = getMarginRatio(clearingHouse, user);
     if (user.marginRatio.lte(slipLiq)) {
-        liquidate(clearingHouse, userMap, user, tpuConnection, recentBlockhash, liquidatorAccountPublicKey);
+        liquidate(clearingHouse, userMap, user, tpuConnection, liquidatorAccountPublicKey);
     }
 }
 
 const checkBucket = async (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection, numUsersChecked: Array<number>, checkTime: Array<number>, liquidatorAccountPublicKey: PublicKey) => {
     const start = process.hrtime();
     const keys = bucket.getAllKeys();
-    const recentBlockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash;
-    keys.forEach(async (key) => checkForLiquidation(clearingHouse, userMap, key, tpuConnection, recentBlockhash, liquidatorAccountPublicKey))
+    keys.forEach(async (key) => checkForLiquidation(clearingHouse, userMap, key, tpuConnection, liquidatorAccountPublicKey))
     numUsersChecked.push(keys.length)
     const time = process.hrtime(start);
     checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
@@ -151,17 +150,21 @@ const wrapInTx = (instruction: TransactionInstruction) : Transaction  => {
 	return new Transaction().add(instruction);
 }
 
-const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection, recentBlockhash: string, liquidatorAccountPublicKey: PublicKey) : Promise<void> => {
+
+let recentBlockhashes : Set<string> = new Set<string>();
+
+const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) : Promise<void> => {
     let instruction = user.liquidationInstruction
     if (instruction === undefined) {
         instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
     }
-    let tx = wrapInTx(instruction)
-    tx.recentBlockhash = recentBlockhash;
-    tx.feePayer = clearingHouse.wallet.publicKey
-    tx = await clearingHouse.wallet.signTransaction(tx)
-    const txId = await tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
-    console.log(txId);
+    let tx = wrapInTx(instruction);
+    [...recentBlockhashes.values()].forEach(async blkhash => {
+        tx.recentBlockhash = blkhash;
+        tx.feePayer = clearingHouse.wallet.publicKey
+        tx = await clearingHouse.wallet.signTransaction(tx)
+        tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
+    })
     
 }
 
@@ -196,10 +199,6 @@ const getLiquidateIx = (
                 });
             }
         }
-
-        // clearingHouse.getLiquidateIx(user.userAccountPublicKey).then((regularTxIx) => {
-            
-        // })
         const state = clearingHouse.getStateAccount();
         clearingHouse.getStatePublicKey().then(statePublicKey => {
             const keys = [
@@ -418,7 +417,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                     user.marginRatio = getMarginRatio(clearingHouse, user);
                     setTimeout(() => {
                         prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
-                    }, 1000)
+                    }, 1000 * i)
                     userMap.set(user.publicKey, user);
                     await sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey)
                 }))
@@ -556,6 +555,8 @@ const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, acco
 }
 
 const main = async () => {
+    const mainnetRPC = new Connection('https://api.mainnet-beta.solana.com', { commitment: 'processed' });
+    const rpcPool = new Connection('https://free.rpcpool.com', { commitment: 'processed' } );
     const tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
     const clearingHouse = _.createClearingHouse(tpuConnection)
     await clearingHouse.subscribe(['liquidationHistoryAccount', "fundingRateHistoryAccount"]);
@@ -590,6 +591,15 @@ const main = async () => {
     let numUsersChecked = new Array<number>();
     let checkTime = new Array<number>();
 
+
+    setInterval(async () => {
+        recentBlockhashes = new Set<string>([
+            (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
+            (await clearingHouse.connection.getRecentBlockhash()).blockhash, 
+            (await mainnetRPC.getRecentBlockhash()).blockhash,
+            (await rpcPool.getRecentBlockhash()).blockhash
+        ]);
+    }, 500)
 
     setInterval(() => {
         checkBucket(clearingHouse, userMap, highPriorityBucket, tpuConnection, numUsersChecked, checkTime, liquidatorAccountPublicKey)
