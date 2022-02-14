@@ -28,6 +28,7 @@ import { config } from 'dotenv';
 import { getLiquidationChart, getLiquidatorProfitTables, mapHistoryAccountToLiquidationsArray, updateLiquidatorMap } from './liqHistoryVisualizer.js';
 import { getTable } from './util/table.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { isPropertyAccessChain } from 'typescript';
 config({path: './.env.local'});
 
 // how many minutes before users will be fetched from storage
@@ -355,7 +356,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
             ...u
         }
     })), 100)
-
+    
     const data = flatDeep(usersSetup.map(chunk => ([
         {
             jsonrpc: "2.0",
@@ -381,10 +382,8 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
         }
     ])), Infinity)
     const chunkedData = chunkArray(data, 10);
-    console.log(chunkedData.length);
     const chunkedRequests = chunkArray(chunkedData, 10);
-    console.log(chunkedRequests.length);
-    
+
     const responses = flatDeep(await Promise.all(chunkedRequests.map((request, index) => 
             new Promise((resolve) => {
                 setTimeout(async () => {
@@ -650,12 +649,17 @@ const main = async () => {
 
     // get blockhashes of multiple rpcs every second
     setInterval(async () => {
-        recentBlockhashes = new Set<string>([
-            (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
-            (await clearingHouse.connection.getRecentBlockhash()).blockhash, 
-            (await mainnetRPC.getRecentBlockhash()).blockhash,
-            (await rpcPool.getRecentBlockhash()).blockhash
-        ]);
+        try {
+            recentBlockhashes = new Set<string>([
+                (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
+                (await clearingHouse.connection.getRecentBlockhash()).blockhash, 
+                (await mainnetRPC.getRecentBlockhash()).blockhash,
+                (await rpcPool.getRecentBlockhash()).blockhash
+            ]);
+        } catch (error) {
+
+        }
+        
     }, 1000)
 
     // check the highPriorityBucket every x seconds
@@ -699,6 +703,13 @@ const main = async () => {
 
 };
 
+process.on('uncaughtException', () => {
+
+})
+
+process.on('unhandledRejection', () => {
+    
+})
 
 main();
 
