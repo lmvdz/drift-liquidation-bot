@@ -674,28 +674,28 @@ const main = async () => {
 
 
     // print out the tables every x minutes
-    // setInterval(() => {
-    //     const margin = [...userMap.values()].map(u => u.marginRatio.toNumber())
-    //     const data = {
-    //         userCount: userMap.size,
-    //         prio: {
-    //             high: highPriorityBucket.getAllKeys().length,
-    //             medium: mediumPriorityBucket.getAllKeys().length,
-    //             low: lowPriorityBucket.getAllKeys().length
-    //         },
-    //         // intervalCount: intervalCount,
-    //         // checked: numUsersChecked,
-    //         margin: Math.min(...margin) / 100,
-    //         // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
-    //     }
+    setInterval(() => {
+        const margin = [...userMap.values()].map(u => u.marginRatio.toNumber())
+        const data = {
+            userCount: userMap.size,
+            prio: {
+                high: highPriorityBucket.getAllKeys().length,
+                medium: mediumPriorityBucket.getAllKeys().length,
+                low: lowPriorityBucket.getAllKeys().length
+            },
+            // intervalCount: intervalCount,
+            // checked: numUsersChecked,
+            margin: Math.min(...margin) / 100,
+            // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
+        }
 
-    //     print(clearingHouse, data, liquidatorAccountPublicKey).then(() => {
-    //         intervalCount = 0
-    //         numUsersChecked = new Array<number>();
-    //         checkTime = new Array<number>();
-    //     })
+        print(clearingHouse, data, liquidatorAccountPublicKey).then(() => {
+            intervalCount = 0
+            numUsersChecked = new Array<number>();
+            checkTime = new Array<number>();
+        })
 
-    // }, 60 * 1000 * workerLoopTimeInMinutes);
+    }, 60 * 1000 * workerLoopTimeInMinutes);
 
 };
 
