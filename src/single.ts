@@ -356,7 +356,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
             ...u
         }
     })), 100)
-    
+
     const data = flatDeep(usersSetup.map(chunk => ([
         {
             jsonrpc: "2.0",
@@ -382,14 +382,14 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
         }
     ])), Infinity)
     const chunkedData = chunkArray(data, 10);
-    const chunkedRequests = chunkArray(chunkedData, 10);
+    const chunkedRequests = chunkArray(chunkedData, 5);
 
     const responses = flatDeep(await Promise.all(chunkedRequests.map((request, index) => 
             new Promise((resolve) => {
                 setTimeout(async () => {
                     //@ts-ignore
                     resolve(flatDeep(await Promise.all(request.map( async dataChunk => (await axios.post(tpuConnection._rpcEndpoint, dataChunk)).data )), Infinity))
-                }, index * 1.5 * 1000)
+                }, index * 1000)
             })
         )), 
         Infinity
