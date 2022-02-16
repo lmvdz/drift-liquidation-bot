@@ -133,7 +133,12 @@ const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<st
     const user = userMap.get(pub)
     user.marginRatio = getMarginRatio(clearingHouse, user);
     if (user.marginRatio.lte(slipLiq)) {
-        liquidate(clearingHouse, userMap, user, tpuConnection, liquidatorAccountPublicKey);
+        try {
+            liquidate(clearingHouse, userMap, user, tpuConnection, liquidatorAccountPublicKey);
+        } catch (error) {
+            console.error(error);
+        }
+        
     }
 }
 
