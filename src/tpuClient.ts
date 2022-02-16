@@ -63,25 +63,28 @@ export class LeaderTpuCache {
             let leaderSet = new Set<string>();
             let leaderSockets = new Array<string>();
             let checkedSlots = 0;
-            for(let i = current_slot; i <= current_slot+fanout_slots; i++) {
-                this.connection.getSlotLeader('recent').then(leader => {
-                    let tpu_socket = this.leaderTpuMap.get(leader)
-                    if (tpu_socket !== undefined && tpu_socket !== null) {
-                        if (!leaderSet.has(leader)) {
-                            leaderSet.add(leader)
-                            leaderSockets.push(tpu_socket)
+            for(let i = 0; i <= fanout_slots; i++) {
+                setTimeout(() => {
+                    this.connection.getSlotLeader('processed').then(leader => {
+                        let tpu_socket = this.leaderTpuMap.get(leader)
+                        if (tpu_socket !== undefined && tpu_socket !== null) {
+                            if (!leaderSet.has(leader)) {
+                                leaderSet.add(leader)
+                                leaderSockets.push(tpu_socket)
+                            }
+                        } else {
+                            console.log('TPU not available for leader: ', leader);
                         }
-                    } else {
-                        console.log('TPU not available for leader: ', leader);
-                    }
-                }).catch(error => {
-                    console.warn(`leader not known for slot ${i}, cache holds slots [${this.first_slot},${this.lastSlot()}]`)
-                }).then(() => {
-                    checkedSlots++;
-                    if (checkedSlots === fanout_slots) {
-                        resolve(leaderSockets)
-                    }
-                })
+                    }).catch(error => {
+                        console.warn(`leader not known for slot ${i+current_slot}, cache holds slots [${this.first_slot},${this.lastSlot()}]`)
+                    }).then(() => {
+                        checkedSlots++;
+                        if (checkedSlots === fanout_slots) {
+                            resolve(leaderSockets)
+                        }
+                    })
+                }, 1000 * i)
+                
             }
         })
         

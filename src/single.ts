@@ -650,16 +650,16 @@ const main = async () => {
     // get blockhashes of multiple rpcs every second
     setInterval(async () => {
         try {
-            recentBlockhashes = new Set<string>([
+            let blkhashes = [
                 (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
                 (await clearingHouse.connection.getRecentBlockhash()).blockhash, 
                 (await mainnetRPC.getRecentBlockhash()).blockhash,
                 (await rpcPool.getRecentBlockhash()).blockhash
-            ]);
+            ];
+            recentBlockhashes = new Set<string>(blkhashes);
         } catch (error) {
 
         }
-        
     }, 1000)
 
     // check the highPriorityBucket every x seconds
