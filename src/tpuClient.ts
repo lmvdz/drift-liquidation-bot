@@ -63,29 +63,24 @@ export class LeaderTpuCache {
             let leaderSet = new Set<string>();
             let leaderSockets = new Array<string>();
             let checkedSlots = 0;
-            for(let i = 0; i <= fanout_slots; i++) {
-                setTimeout(() => {
-                    this.connection.getSlotLeader('processed').then(leader => {
-                        let tpu_socket = this.leaderTpuMap.get(leader)
-                        if (tpu_socket !== undefined && tpu_socket !== null) {
-                            if (!leaderSet.has(leader)) {
-                                leaderSet.add(leader)
-                                leaderSockets.push(tpu_socket)
-                            }
-                        } else {
-                            console.log('TPU not available for leader: ', leader);
+            this.connection.getSlotLeaders(current_slot, fanout_slots).then(slotLeaders => {
+                slotLeaders.forEach((leader, index) => {
+                    let tpu_socket = this.leaderTpuMap.get(leader.toBase58())
+                    if (tpu_socket !== undefined && tpu_socket !== null) {
+                        if (!leaderSet.has(leader.toBase58())) {
+                            leaderSet.add(leader.toBase58())
+                            leaderSockets.push(tpu_socket)
                         }
-                    }).catch(error => {
-                        console.warn(`leader not known for slot ${i+current_slot}, cache holds slots [${this.first_slot},${this.lastSlot()}]`)
-                    }).then(() => {
-                        checkedSlots++;
-                        if (checkedSlots === fanout_slots) {
-                            resolve(leaderSockets)
-                        }
-                    })
-                }, 1000 * i)
+                    } else {
+                        console.log('TPU not available for leader: ', leader.toBase58());
+                    }
+                    checkedSlots++;
+                    if (checkedSlots === fanout_slots) {
+                        resolve(leaderSockets)
+                    }
+                })
                 
-            }
+            })
         })
         
     }
@@ -163,7 +158,6 @@ export class TpuClient {
                 tpu_addresses.forEach(tpu_address => {
                     this.sendSocket.send(rawTransaction, parseInt(tpu_address.split(':')[1]), tpu_address.split(':')[0], (error, bytes) => {
                         if (!error) {
-                            // console.log(bytes);
                             const message = Transaction.from(rawTransaction);
                             resolve(bs58.encode(message.signature));
                         } else {
