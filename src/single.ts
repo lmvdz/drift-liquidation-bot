@@ -164,14 +164,17 @@ const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User
     if (instruction === undefined) {
         instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
     }
-    let tx = wrapInTx(instruction);
-    [...recentBlockhashes.values()].forEach(async blkhash => {
-        tx.recentBlockhash = blkhash;
-        tx.feePayer = clearingHouse.wallet.publicKey
-        tx = await clearingHouse.wallet.signTransaction(tx)
-        tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
-    })
-    
+    try {
+        let tx = wrapInTx(instruction);
+        [...recentBlockhashes.values()].forEach(async blkhash => {
+            tx.recentBlockhash = blkhash;
+            tx.feePayer = clearingHouse.wallet.publicKey
+            tx = await clearingHouse.wallet.signTransaction(tx)
+            tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
+        })
+    } catch (error) {
+        prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey);
+    }
 }
 
 const prepareUserLiquidationIX = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, liquidatorAccountPublicKey: PublicKey) : Promise<TransactionInstruction> => {
@@ -651,21 +654,39 @@ const main = async () => {
     let numUsersChecked = new Array<number>();
     let checkTime = new Array<number>();
 
+    let blockhashIndex = 0;
+
+    const getBlockhash = async () : Promise<string> => {
+        let blockhash = null;
+        switch(blockhashIndex) {
+            case 0:
+                blockhash = (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash;
+                break;
+            case 1:
+                blockhash = (await clearingHouse.connection.getRecentBlockhash()).blockhash
+                break;
+            case 2:
+                blockhash = (await mainnetRPC.getRecentBlockhash()).blockhash
+                break;
+            case 3:
+                blockhash = (await rpcPool.getRecentBlockhash()).blockhash
+                break;
+        }
+        blockhashIndex++;
+        if (blockhashIndex > 3) {
+            blockhashIndex = 0;
+        }
+        return blockhash
+    }
 
     // get blockhashes of multiple rpcs every second
     setInterval(async () => {
         try {
-            let blkhashes = [
-                (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash, 
-                (await clearingHouse.connection.getRecentBlockhash()).blockhash, 
-                (await mainnetRPC.getRecentBlockhash()).blockhash,
-                (await rpcPool.getRecentBlockhash()).blockhash
-            ];
-            recentBlockhashes = new Set<string>(blkhashes);
+            recentBlockhashes = new Set<string>([await getBlockhash()]);
         } catch (error) {
-
+            console.error(error);
         }
-    }, 1000)
+    }, 500)
 
     // check the highPriorityBucket every x seconds
     setInterval(() => {
