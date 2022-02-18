@@ -1,5 +1,5 @@
 // used to get environment variables
-import { Wallet, initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient, BN } from '@drift-labs/sdk';
+import { Wallet, initialize, DriftEnv, ClearingHouse, calculateEstimatedFundingRate, PythClient, BN, getClearingHouse, getPollingClearingHouseConfig, BulkAccountLoader } from '@drift-labs/sdk';
 import { Keypair, Connection, PublicKey } from '@solana/web3.js';
 
 import { from_b58 } from './util/base56.js';
@@ -45,11 +45,14 @@ const sdkConfig = initialize({ env: 'mainnet-beta' as DriftEnv });
 
 
 const createClearingHouse = (connection : Connection ) : ClearingHouse => {
-    return ClearingHouse.from(
-        connection,
-        botWallet,
-        new PublicKey(
-            sdkConfig.CLEARING_HOUSE_PROGRAM_ID
+    return getClearingHouse(
+        getPollingClearingHouseConfig(
+            connection,
+            botWallet,
+            new PublicKey(
+                sdkConfig.CLEARING_HOUSE_PROGRAM_ID
+            ),
+            new BulkAccountLoader(connection, 'processed', 1000)
         )
     )
 }

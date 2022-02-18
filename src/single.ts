@@ -618,9 +618,9 @@ const main = async () => {
     const mainnetRPC = new Connection('https://api.mainnet-beta.solana.com', { commitment: 'processed' });
     const rpcPool = new Connection('https://free.rpcpool.com', { commitment: 'processed' } );
     const tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 60 * 1000 } as ConnectionConfig );
-    const clearingHouse = _.createClearingHouse(tpuConnection)
+    const clearingHouse = _.createClearingHouse(tpuConnection);
     await clearingHouse.subscribe(['liquidationHistoryAccount', "fundingRateHistoryAccount"]);
-    const liquidatorAccountPublicKey = await clearingHouse.getUserAccountPublicKey()
+    const liquidatorAccountPublicKey = await clearingHouse.getUserAccountPublicKey();
 
     const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
     const userMap : Map<string, User> = new Map<string, User>();
@@ -638,12 +638,14 @@ const main = async () => {
     
     getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
 
+    
     setTimeout(() => {
         setInterval(() => {
             getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
         }, 60 * 1000)
     }, 30 * 1000)
     
+
     setInterval(() => {
         sortUsers(clearingHouse, userMap, accountSubscriberBucketMap, liquidatorAccountPublicKey);
     }, (60 * 1000));
