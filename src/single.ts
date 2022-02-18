@@ -598,11 +598,13 @@ const print = async (clearingHouse: ClearingHouse, data : any, userAccount: Publ
 }
 
 
+const blacklistAuthority = ['5jdnNir8fdbQPjFvUxNJsXEKL25Z5FnzGv3aWGDVSwZr']
+
 const getUsers = (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     if (fs.pathExistsSync('./storage/programUserAccounts')) {
         let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
         (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>).forEach(async user => {
-            if (!userMap.has(user.publicKey))
+            if (!userMap.has(user.publicKey) && !blacklistAuthority.includes(user.authority))
                 setupUser(clearingHouse, userMap, accountSubscriberBucketMap, user as User, tpuConnection, liquidatorAccountPublicKey)
         })
     } else {
