@@ -17,8 +17,8 @@ import {
     ZERO,
     BN,
     PollingAccountSubscriber,
-    getUserAccountPublicKey,
-    Markets} from '@drift-labs/sdk';
+    Markets,
+    UserOrdersAccount} from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -62,9 +62,10 @@ interface User {
     publicKey: string,
     authority: string,
     positions: string,
-    accountData: UserAccount,
-    userAccountPublicKey: PublicKey,
+    orders: string,
+    accountData: UserAccount, 
     positionsAccountData: UserPositionsAccount,
+    ordersAccountData: UserOrdersAccount,
     liquidationInstruction: TransactionInstruction,
     marginRatio: BN,
     prio: Priority
@@ -132,6 +133,7 @@ const getMarginRatio = (clearingHouse : ClearingHouse, user: User) => {
 const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, pub : string, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {    
     const user = userMap.get(pub)
     user.marginRatio = getMarginRatio(clearingHouse, user);
+    userMap.set(user.publicKey, user);
     if (user.marginRatio.lte(slipLiq)) {
         try {
             liquidate(clearingHouse, userMap, user, tpuConnection, liquidatorAccountPublicKey);
@@ -179,10 +181,6 @@ const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User
 }
 
 const prepareUserLiquidationIX = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, user: User, liquidatorAccountPublicKey: PublicKey) : Promise<TransactionInstruction> => {
-    if (user.userAccountPublicKey === undefined || user.userAccountPublicKey === null) {
-        user.userAccountPublicKey = await getUserAccountPublicKey(clearingHouse.program.programId, new PublicKey(user.authority));
-        userMap.set(user.publicKey, user);
-    }
     const liquidationInstruction = await getLiquidateIx(clearingHouse, user, liquidatorAccountPublicKey);
     userMap.set(user.publicKey, { ...user, liquidationInstruction });
     return liquidationInstruction;
@@ -194,7 +192,7 @@ const getLiquidateIx = (
     liquidatorAccountPublicKey: PublicKey
 ): Promise<TransactionInstruction>  => {
     return new Promise((resolve) => {
-        const liquidateeUserAccountPublicKey = user.userAccountPublicKey;
+        const liquidateeUserAccountPublicKey = new PublicKey(user.publicKey);
         const liquidateeUserAccount = user.accountData
         const liquidateePositions = user.positionsAccountData
         const markets = clearingHouse.getMarketsAccount();
@@ -337,6 +335,16 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
+        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userOrders', user.orders, (data: UserOrdersAccount) => {
+            // console.log(data);
+            // console.log('updated user', 'positions data', user.publicKey)
+            let oldData = userMap.get(user.publicKey);
+            let newData = { ...oldData, ordersAccountData: data } as User;
+            newData.marginRatio = getMarginRatio(clearingHouse, newData);
+            userMap.set(user.publicKey, newData);
+            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
+        });
+
     }
 }
 
@@ -388,7 +396,18 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                 commitment: "processed",
                 },
             ]
-        }
+        },
+        {
+            jsonrpc: "2.0",
+            id: "1",
+            method: "getMultipleAccounts",
+            params: [
+                chunk.map(u => u.orders),
+                {
+                commitment: "processed",
+                },
+            ]
+        },
     ])), Infinity)
     const chunkedData = chunkArray(data, 10);
     const chunkedRequests = chunkArray(chunkedData, 5);
@@ -405,9 +424,9 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
     )
 
     for(let x = 0; x < responses.length/2; x++) {
-        const userAccounts = responses[x*2]
-        const userPositionAccounts = responses[(x*2) + 1]
-
+        const userAccounts = responses[x*3]
+        const userPositionAccounts = responses[(x*3) + 1]
+        const userOrdersAccounts = responses[(x*3) + 2]
         const mappedUserAccounts = userAccounts.result.value.map(u =>  {
             const raw: string = u.data[0];
             const dataType = u.data[1]
@@ -431,6 +450,19 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                 buffer
             ) as UserPositionsAccount
         })
+
+        const mappedUserOrdersAccounts = userOrdersAccounts.result.value.map(o => {
+            const raw: string = o.data[0];
+            const dataType = o.data[1]
+            const buffer = Buffer.from(raw, dataType);
+            return clearingHouse.program.account[
+                'userOrders'
+            ].coder.accounts.decode(
+                // @ts-ignore
+                clearingHouse.program.account['userOrders']._idlAccount.name,
+                buffer
+            ) as UserOrdersAccount
+        })
         
 
         Promise.all(usersSetup[x].map((u, i) => {
@@ -438,7 +470,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                 ...u,
                 accountData: mappedUserAccounts[i],
                 positionsAccountData: mappedUserPositionAccounts[i],
-                positions: mappedUserAccounts[i].positions.toBase58()
+                ordersAccountData: mappedUserOrdersAccounts[i]
             }
 
             user.marginRatio = getMarginRatio(clearingHouse, user);

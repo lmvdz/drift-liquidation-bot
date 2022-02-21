@@ -11,7 +11,7 @@ import { default as _ } from './clearingHouse.js';
 
 import { config } from 'dotenv';
 import { Connection, ConnectionConfig } from '@solana/web3.js';
-import { UserAccount } from '@drift-labs/sdk';
+import { UserAccount, UserOrdersAccount } from '@drift-labs/sdk';
 config( {path: './.env.local'} );
 
 
@@ -19,7 +19,9 @@ const clearingHouse = _.createClearingHouse(new Connection(process.env.RPC_URL, 
 console.log(clearingHouse.program.programId.toBase58())
 fs.ensureDirSync('./storage')
 clearingHouse.program.account.user.all().then((newProgramUserAccounts: ProgramAccount<UserAccount>[]) => {
-    fs.writeFileSync('./storage/programUserAccounts', btoa(JSON.stringify(newProgramUserAccounts.map(userAccount => ({ publicKey: userAccount.publicKey.toBase58(), authority: userAccount.account.authority.toBase58(), positions: userAccount.account.positions.toBase58() })))))
+    clearingHouse.program.account.userOrders.all().then((userOrderProgramAccounts : ProgramAccount<UserOrdersAccount>[]) => {
+        fs.writeFileSync('./storage/programUserAccounts', btoa(JSON.stringify(newProgramUserAccounts.map(userAccount => ({ publicKey: userAccount.publicKey.toBase58(), authority: userAccount.account.authority.toBase58(), positions: userAccount.account.positions.toBase58(), orders: userOrderProgramAccounts.find(x => x.account.user.toBase58() === userAccount.publicKey.toBase58()) })))))
+    })
     // console.log(newProgramUserAccounts);
     // if (fs.pathExistsSync('./storage/programUserAccounts')) {
     //     const programUserAccounts = fs.readFileSync('./storage/programUserAccounts', 'utf8')
