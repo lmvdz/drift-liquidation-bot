@@ -147,7 +147,7 @@ const checkForLiquidation = async (clearingHouse: ClearingHouse, userMap: Map<st
 const checkBucket = async (clearingHouse : ClearingHouse, userMap: Map<string, User>, bucket: PollingAccountSubscriber, tpuConnection : TpuConnection, numUsersChecked: Array<number>, checkTime: Array<number>, liquidatorAccountPublicKey: PublicKey) => {
     const start = process.hrtime();
     const keys = bucket.getAllKeys();
-    keys.forEach(async (key) => checkForLiquidation(clearingHouse, userMap, key, tpuConnection, liquidatorAccountPublicKey))
+    await Promise.all(keys.map(async (key) => await checkForLiquidation(clearingHouse, userMap, key, tpuConnection, liquidatorAccountPublicKey)))
     numUsersChecked.push(keys.length)
     const time = process.hrtime(start);
     checkTime.push(Number(time[0] * 1000) + Number(time[1] / 1000000))
@@ -167,7 +167,7 @@ const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User
         instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
     }
     try {
-        console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber());
+        console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()));
         let tx = wrapInTx(instruction);
         [...recentBlockhashes.values()].forEach(async blkhash => {
             tx.recentBlockhash = blkhash;
@@ -319,16 +319,15 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
             // console.log('updated user', 'account data', user.publicKey)
-            let newData = { ...userMap.get(user.publicKey), accountData: data } as User
-            userMap.set(user.publicKey, newData);
-            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
+            userMap.set(user.publicKey, { ...userMap.get(user.publicKey), accountData: data } as User);
+            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, userMap.get(user.publicKey), liquidatorAccountPublicKey);
         });
 
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
             // console.log(data);
             // console.log('updated user', 'positions data', user.publicKey)
-            let oldData = userMap.get(user.publicKey);
-            let newData = { ...oldData, positionsAccountData: data } as User;
+            const oldData = userMap.get(user.publicKey);
+            const newData = { ...oldData, positionsAccountData: data } as User;
             newData.marginRatio = getMarginRatio(clearingHouse, newData);
             userMap.set(user.publicKey, newData);
             prepareUserLiquidationIX(clearingHouse, userMap, newData, liquidatorAccountPublicKey);
@@ -338,8 +337,8 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
         accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userOrders', user.orders, (data: UserOrdersAccount) => {
             // console.log(data);
             // console.log('updated user', 'positions data', user.publicKey)
-            let oldData = userMap.get(user.publicKey);
-            let newData = { ...oldData, ordersAccountData: data } as User;
+            const oldData = userMap.get(user.publicKey);
+            const newData = { ...oldData, ordersAccountData: data } as User;
             newData.marginRatio = getMarginRatio(clearingHouse, newData);
             userMap.set(user.publicKey, newData);
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
