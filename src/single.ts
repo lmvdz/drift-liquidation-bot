@@ -422,7 +422,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
         Infinity
     )
 
-    for(let x = 0; x < responses.length/2; x++) {
+    for(let x = 0; x < responses.length/3; x++) {
         const userAccounts = responses[x*3]
         const userPositionAccounts = responses[(x*3) + 1]
         const userOrdersAccounts = responses[(x*3) + 2]
@@ -472,7 +472,10 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                 ordersAccountData: mappedUserOrdersAccounts[i]
             }
 
+            console.log(user)
+
             user.marginRatio = getMarginRatio(clearingHouse, user);
+            console.log(user)
             setTimeout(() => {
                 prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
             }, 1000 * i)
