@@ -334,16 +334,6 @@ const sortUser = async (clearingHouse: ClearingHouse, userMap: Map<string, User>
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
         });
 
-        accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userOrders', user.orders, (data: UserOrdersAccount) => {
-            // console.log(data);
-            // console.log('updated user', 'positions data', user.publicKey)
-            const oldData = userMap.get(user.publicKey);
-            const newData = { ...oldData, ordersAccountData: data } as User;
-            newData.marginRatio = getMarginRatio(clearingHouse, newData);
-            userMap.set(user.publicKey, newData);
-            sortUser(clearingHouse, userMap, accountSubscriberBucketMap, newData, liquidatorAccountPublicKey);
-        });
-
     }
 }
 
@@ -455,37 +445,6 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
             sortUser(clearingHouse, userMap, accountSubscriberBucketMap, user, liquidatorAccountPublicKey)
         }))
     }
-    // await Promise.all(usersSetup.map(async (userArray, index) => {
-    //     const userAccountKeys = userArray.map(u => u.publicKey)
-    //     const userPositions = userArray.map(u => u.positions)
-    //     sleep((index + 1) * 2000).then(() => {
-    //         //@ts-ignore
-    //         axios.post(tpuConnection._rpcEndpoint, [{
-    //             jsonrpc: "2.0",
-    //             id: "1",
-    //             method: "getMultipleAccounts",
-    //             params: [
-    //                 userAccountKeys,
-    //               {
-    //                 commitment: "processed",
-    //               },
-    //             ],
-    //         }, {
-    //             jsonrpc: "2.0",
-    //             id: "1",
-    //             method: "getMultipleAccounts",
-    //             params: [
-    //                 userPositions,
-    //               {
-    //                 commitment: "processed",
-    //               },
-    //             ],
-    //         }]).then(response => {
-                
-    //         });
-            
-    //     })
-    // }))
 }
 
 
