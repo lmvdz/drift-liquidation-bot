@@ -598,7 +598,7 @@ const main = async () => {
     const mediumPriorityBucket = new PollingAccountSubscriber('medium prio',clearingHouse.program, 0, 30 * 1000);
     accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-    const highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 1000);
+    const highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 5000);
     accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
     
     getUsers(clearingHouse, userMap, accountSubscriberBucketMap, tpuConnection, liquidatorAccountPublicKey)
