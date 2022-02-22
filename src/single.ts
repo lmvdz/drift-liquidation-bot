@@ -363,6 +363,9 @@ function flatDeep(arr : Array<any>, d = 1) : Array<any> {
     return d > 0 ? arr.reduce((acc, val) => acc.concat(Array.isArray(val) ? flatDeep(val, d - 1) : val), []) : arr.slice();
 }
 
+
+//get all the users' account, positions
+
 const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, User>, accountSubscriberBucketMap: Map<Priority, PollingAccountSubscriber>, users: Array<User>, tpuConnection: TpuConnection, liquidatorAccountPublicKey: PublicKey) => {
     let usersSetup = []
 
@@ -395,18 +398,7 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
                 commitment: "processed",
                 },
             ]
-        },
-        {
-            jsonrpc: "2.0",
-            id: "1",
-            method: "getMultipleAccounts",
-            params: [
-                chunk.map(u => u.orders),
-                {
-                commitment: "processed",
-                },
-            ]
-        },
+        }
     ])), Infinity)
     const chunkedData = chunkArray(data, 10);
     const chunkedRequests = chunkArray(chunkedData, 5);
@@ -422,10 +414,9 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
         Infinity
     )
 
-    for(let x = 0; x < responses.length/3; x++) {
-        const userAccounts = responses[x*3]
-        const userPositionAccounts = responses[(x*3) + 1]
-        const userOrdersAccounts = responses[(x*3) + 2]
+    for(let x = 0; x < responses.length/2; x++) {
+        const userAccounts = responses[x*2]
+        const userPositionAccounts = responses[(x*2) + 1]
         const mappedUserAccounts = userAccounts.result.value.map(u =>  {
             const raw: string = u.data[0];
             const dataType = u.data[1]
@@ -450,32 +441,13 @@ const setupUsers = async (clearingHouse: ClearingHouse, userMap: Map<string, Use
             ) as UserPositionsAccount
         })
 
-        const mappedUserOrdersAccounts = userOrdersAccounts.result.value.map(o => {
-            const raw: string = o.data[0];
-            const dataType = o.data[1]
-            const buffer = Buffer.from(raw, dataType);
-            return clearingHouse.program.account[
-                'userOrders'
-            ].coder.accounts.decode(
-                // @ts-ignore
-                clearingHouse.program.account['userOrders']._idlAccount.name,
-                buffer
-            ) as UserOrdersAccount
-        })
-        
-
         Promise.all(usersSetup[x].map((u, i) => {
             let user = {
                 ...u,
                 accountData: mappedUserAccounts[i],
-                positionsAccountData: mappedUserPositionAccounts[i],
-                ordersAccountData: mappedUserOrdersAccounts[i]
+                positionsAccountData: mappedUserPositionAccounts[i]
             }
-
-            console.log(user)
-
             user.marginRatio = getMarginRatio(clearingHouse, user);
-            console.log(user)
             setTimeout(() => {
                 prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
             }, 1000 * i)
