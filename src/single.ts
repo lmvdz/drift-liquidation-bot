@@ -167,7 +167,7 @@ const liquidate = async (clearingHouse: ClearingHouse, userMap: Map<string, User
         instruction = await prepareUserLiquidationIX(clearingHouse, userMap, user, liquidatorAccountPublicKey)
     }
     try {
-        console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()));
+        console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()), user.positionsAccountData.positions.length);
         let tx = wrapInTx(instruction);
         [...recentBlockhashes.values()].forEach(async blkhash => {
             tx.recentBlockhash = blkhash;
