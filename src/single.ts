@@ -240,28 +240,29 @@ class Liquidator {
         this.mediumPriorityBucket = new PollingAccountSubscriber('medium prio', this.clearingHouse.program, 0, 30 * 1000);
         this.accountSubscriberBucketMap.set(Priority.medium, this.mediumPriorityBucket)
 
-        this.highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 1000);
+        this.highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 2000);
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
-        this.clearingHouseSubscriber = new PollingAccountSubscriber('clearingHouse', clearingHouse.program, 0, 1000);
+        this.clearingHouseSubscriber = new PollingAccountSubscriber('clearingHouse', clearingHouse.program, 0, 500);
 
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'state', this.clearingHouseData.state, (data: StateAccount) => {
-            console.log('updated clearingHouse state');
+            // console.log('updated clearingHouse state');
             this.clearingHouseData.stateAccount = data;
         });
 
+        // this needs to update as fast a possible to get the most up to date margin ratio.
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'markets', this.clearingHouseData.markets, (data: MarketsAccount) => {
-            console.log('updated clearingHouse markets');
+            // console.log('updated clearingHouse markets');
             this.clearingHouseData.marketsAccount = data;
         });
 
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'liquidationHistory', this.clearingHouseData.liquidationHistory, (data: LiquidationHistoryAccount) => {
-            console.log('updated clearingHouse liquidationHistory');
+            // console.log('updated clearingHouse liquidationHistory');
             this.clearingHouseData.liquidationHistoryAccount = data;
         });
 
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'fundingRateHistory', this.clearingHouseData.fundingRateHistory, (data: FundingRateHistoryAccount) => {
-            console.log('updated clearingHouse fundingRate');
+            // console.log('updated clearingHouse fundingRate');
             this.clearingHouseData.fundingRateHistoryAccount = data;
         });
         
@@ -504,7 +505,7 @@ class Liquidator {
         const responses = flatDeep(await Promise.all(chunkedRequests.map((request, index) => 
                 new Promise((resolve) => {
                     setTimeout(async () => {
-                        console.log(index);
+                        // console.log(index);
                         Promise.all(request.map(dataChunk => (
                             new Promise((resolve) => {
                                 //@ts-ignore
@@ -577,14 +578,13 @@ class Liquidator {
             this.userMap.set(user.publicKey, { ...user, prio: newPrio})
 
             this.accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
-                // console.log('updated user', 'account data', user.publicKey)
-                console.log('updated user account data', user.publicKey);
+                // console.log('updated user account data', user.publicKey);
                 this.userMap.set(user.publicKey, { ...this.userMap.get(user.publicKey), accountData: data } as User);
                 this.sortUser(this.userMap.get(user.publicKey));
             });
 
             this.accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
-                console.log('updated user positions data', data.user.toBase58());
+                // console.log('updated user positions data', data.user.toBase58());
                 const oldData = this.userMap.get(data.user.toBase58());
                 const newData = { ...oldData, positionsAccountData: data } as User;
                 newData.marginRatio = this.getMarginRatio(newData);
