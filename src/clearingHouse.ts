@@ -52,7 +52,7 @@ const createClearingHouse = (connection : Connection ) : ClearingHouse => {
             new PublicKey(
                 sdkConfig.CLEARING_HOUSE_PROGRAM_ID
             ),
-            new BulkAccountLoader(connection, 'processed', 1000)
+            new BulkAccountLoader(connection, 'processed', 60 * 1000 * 60)
         )
     )
 }
