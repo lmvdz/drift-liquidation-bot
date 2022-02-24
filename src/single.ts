@@ -1,3 +1,5 @@
+"use strict";
+
 import { atob } from './util/atob.js';
 import fs from 'fs-extra'
 import { default as _ } from './clearingHouse.js'
@@ -240,14 +242,14 @@ class Liquidator {
         this.userMap = new Map<string, User>();
 
         // poll low priority accounts every 5 minutes
-        this.lowPriorityBucket = new PollingAccountSubscriber('low prio', this.clearingHouse.program, 0, 60 * 1000);
+        this.lowPriorityBucket = new PollingAccountSubscriber('low prio', this.clearingHouse.program, 0, 10 * 1000);
         this.accountSubscriberBucketMap.set(Priority.low, this.lowPriorityBucket)
 
         // poll medium priority accounts every minute
-        this.mediumPriorityBucket = new PollingAccountSubscriber('medium prio', this.clearingHouse.program, 0, 30 * 1000);
+        this.mediumPriorityBucket = new PollingAccountSubscriber('medium prio', this.clearingHouse.program, 0, 5 * 1000);
         this.accountSubscriberBucketMap.set(Priority.medium, this.mediumPriorityBucket)
 
-        this.highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 2000);
+        this.highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 1000);
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
         this.clearingHouseSubscriber = new PollingAccountSubscriber('clearingHouse', clearingHouse.program, 0, 500);
@@ -274,10 +276,19 @@ class Liquidator {
         });
         
         this.setupUsers(this.getUsers().map(u => u as User)).then(() => {
+            
             this.accountSubscriberBucketMap.forEach(bucket => bucket.subscribe());
             this.clearingHouseSubscriber.subscribe();
-            this.start();
+
         })
+    }
+    loop() {
+        try {
+            this.start();
+        } catch(error) {
+            this.stop();
+            this.loop();
+        }
     }
     stop() {
         this.intervals.forEach(i => clearInterval(i))
