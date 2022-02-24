@@ -276,7 +276,7 @@ class Liquidator {
         });
         
         this.setupUsers(this.getUsers().map(u => u as User)).then(() => {
-            
+
             this.accountSubscriberBucketMap.forEach(bucket => bucket.subscribe());
             this.clearingHouseSubscriber.subscribe();
 
@@ -809,4 +809,6 @@ class Liquidator {
     }
 }
 
-Liquidator.load();
+Liquidator.load().then((liquidator) => {
+    liquidator.loop();
+})
