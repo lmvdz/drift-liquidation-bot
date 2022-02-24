@@ -257,22 +257,34 @@ class Liquidator {
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'state', this.clearingHouseData.state, (data: StateAccount) => {
             // console.log('updated clearingHouse state');
             this.clearingHouseData.stateAccount = data;
+        }, (error: any) => {
+            console.log('here2');
+            console.error(error);
         });
 
         // this needs to update as fast a possible to get the most up to date margin ratio.
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'markets', this.clearingHouseData.markets, (data: MarketsAccount) => {
             // console.log('updated clearingHouse markets');
             this.clearingHouseData.marketsAccount = data;
+        }, (error: any) => {
+            console.log('here3');
+            console.error(error);
         });
 
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'liquidationHistory', this.clearingHouseData.liquidationHistory, (data: LiquidationHistoryAccount) => {
             // console.log('updated clearingHouse liquidationHistory');
             this.clearingHouseData.liquidationHistoryAccount = data;
+        }, (error: any) => {
+            console.log('here4');
+            console.error(error);
         });
 
         this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'fundingRateHistory', this.clearingHouseData.fundingRateHistory, (data: FundingRateHistoryAccount) => {
             // console.log('updated clearingHouse fundingRate');
             this.clearingHouseData.fundingRateHistoryAccount = data;
+        }, (error: any) => {
+            console.log('here5');
+            console.error(error);
         });
         
         this.setupUsers(this.getUsers().map(u => u as User)).then(() => {
@@ -586,16 +598,24 @@ class Liquidator {
                 // console.log('updated user account data', user.publicKey);
                 this.userMap.set(user.publicKey, { ...this.userMap.get(user.publicKey), accountData: data } as User);
                 this.sortUser(this.userMap.get(user.publicKey));
+            }, (error: any) => {
+                console.error(error);
+                // delete the user from the map to get it picked up next time :)
+                // this.userMap.delete(user.publicKey);
             });
 
             this.accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
                 // console.log('updated user positions data', data.user.toBase58());
-                const oldData = this.userMap.get(data.user.toBase58());
+                const oldData = this.userMap.get(user.publicKey);
                 const newData = { ...oldData, positionsAccountData: data } as User;
                 newData.marginRatio = this.getMarginRatio(newData);
                 this.userMap.set(user.publicKey, newData);
                 this.prepareUserLiquidationIX(newData);
                 this.sortUser(newData);
+            }, (error: any) => {
+                console.error(error);
+                // delete the user from the map to get it picked up next time :)
+                // this.userMap.delete(user.publicKey);
             });
 
         }
@@ -721,8 +741,7 @@ class Liquidator {
     
         return pnlAssetAmount;
     }
-    getMarginRatio( user: User) {
-
+    getMarginRatio( user: User ) {
         const positions = user.positionsAccountData.positions;
         
         if (positions.length === 0) {
