@@ -24,7 +24,10 @@ import {
     StateAccount,
     LiquidationHistoryAccount,
     FundingRateHistoryAccount,
-    MarketsAccount
+    MarketsAccount,
+    calculateMarkPrice,
+    convertToNumber,
+    MARK_PRICE_PRECISION
 } from '@drift-labs/sdk';
 import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
@@ -53,7 +56,7 @@ const highPrioCheckUsersEveryMS = 5
 
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 0.5
+const partialLiquidationSlippage = 1
 
 const slipLiq = new BN(PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
@@ -427,13 +430,14 @@ class Liquidator {
                     // "Total MS": parseFloat(data.time),
                     // "User Check MS": parseFloat(data.time) / (data.intervalCount *  (data.userCount)),
                     "Min Margin %": data.margin
-                }]), [getTable(this.getFunding())], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
+                }]), [getTable(this.getMarketData())], [...liquidationTables].map(t => getTable(t)), liquidationChart].flat().join("\n\n"))
     }
-    getFunding() {
+    getMarketData() {
         // reset the funding rate map, keep memory low
         const fundingRateMap : Map<string, Array<MarketFunding>> = new Map<string, Array<MarketFunding>>();
         let fundingTable = [];
         const funding = this.clearingHouseData.fundingRateHistoryAccount.fundingRateRecords
+
         funding.map(record => {
             return {
                 marketId: record.marketIndex.toNumber(),
@@ -457,11 +461,20 @@ class Liquidator {
         [...fundingRateMap.keys()].forEach(key => {
             fundingTable.push(fundingRateMap.get(key)[0])
         });
+
+        const markPriceMap = Markets.map(market => {
+            return {
+                marketSymbol: market.symbol,
+                markPrice: convertToNumber(calculateMarkPrice(this.clearingHouseData.marketsAccount.markets[market.marketIndex.toNumber()]), MARK_PRICE_PRECISION)
+            }
+        });
+
     
         return fundingTable.map((lastFundingRate : MarketFunding) => {
             return {
                 "Market": lastFundingRate.marketSymbol,
-                "Funding Rate (APR)": lastFundingRate.rate
+                "Funding Rate (APR)": lastFundingRate.rate,
+                "Market Price": markPriceMap.find(m => m.marketSymbol === lastFundingRate.marketSymbol).markPrice.toFixed(4)
             }
         });
     
