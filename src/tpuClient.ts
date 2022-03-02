@@ -58,28 +58,25 @@ export class LeaderTpuCache {
             return null;
         }
     }
-    getLeaderSockets(current_slot: number, fanout_slots: number) : Promise<Array<string>> {
+    getLeaderSockets(fanout_slots: number) : Promise<Array<string>> {
         return new Promise(async (resolve, reject) => {
             let leaderSet = new Set<string>();
             let leaderSockets = new Array<string>();
             let checkedSlots = 0;
-            this.connection.getSlotLeaders(current_slot, fanout_slots).then(slotLeaders => {
-                slotLeaders.forEach((leader, index) => {
-                    let tpu_socket = this.leaderTpuMap.get(leader.toBase58())
-                    if (tpu_socket !== undefined && tpu_socket !== null) {
-                        if (!leaderSet.has(leader.toBase58())) {
-                            leaderSet.add(leader.toBase58())
-                            leaderSockets.push(tpu_socket)
-                        }
-                    } else {
-                        console.log('TPU not available for leader: ', leader.toBase58());
+            this.leaders.forEach((leader, index) => {
+                let tpu_socket = this.leaderTpuMap.get(leader.toBase58())
+                if (tpu_socket !== undefined && tpu_socket !== null) {
+                    if (!leaderSet.has(leader.toBase58())) {
+                        leaderSet.add(leader.toBase58())
+                        leaderSockets.push(tpu_socket)
                     }
-                    checkedSlots++;
-                    if (checkedSlots === fanout_slots) {
-                        resolve(leaderSockets)
-                    }
-                })
-                
+                } else {
+                    console.log('TPU not available for leader: ', leader.toBase58());
+                }
+                checkedSlots++;
+                if (checkedSlots === fanout_slots) {
+                    resolve(leaderSockets)
+                }
             })
         })
         
@@ -205,8 +202,7 @@ export class LeaderTpuService {
         
     }
     leaderTpuSockets(fanout_slots: number) {
-        let current_slot = this.recentSlots.estimatedCurrentSlot();
-        return this.leaderTpuCache.getLeaderSockets(current_slot, fanout_slots)
+        return this.leaderTpuCache.getLeaderSockets(fanout_slots);
     }
     async run() {
         let last_cluster_refresh = Date.now();
