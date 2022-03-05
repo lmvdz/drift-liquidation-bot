@@ -349,9 +349,9 @@ class Liquidator {
             const data = {
                 userCount: this.userMap.size,
                 prio: {
-                    high: this.highPriorityBucket.getAllKeys().length,
-                    medium: this.mediumPriorityBucket.getAllKeys().length,
-                    low: this.lowPriorityBucket.getAllKeys().length
+                    high: this.highPriorityBucket.accounts.length,
+                    medium: this.mediumPriorityBucket.accounts.length,
+                    low: this.lowPriorityBucket.accounts.length
                 },
                 // intervalCount: intervalCount,
                 // checked: numUsersChecked,
