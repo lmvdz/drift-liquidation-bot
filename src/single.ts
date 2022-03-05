@@ -18,7 +18,6 @@ import {
     UserPosition,
     ZERO,
     BN,
-    PollingAccountSubscriber,
     Markets,
     UserOrdersAccount,
     StateAccount,
@@ -29,15 +28,16 @@ import {
     convertToNumber,
     MARK_PRICE_PRECISION
 } from '@drift-labs/sdk';
-import { TpuConnection } from './tpuClient.js';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
-
+import { PollingAccountsFetcher } from "polling-account-fetcher";
+import { TpuConnection } from 'tpu-client'
 
 import { config } from 'dotenv';
 import { getLiquidationChart, getLiquidatorProfitTables, Liquidation, mapHistoryAccountToLiquidationsArray, updateLiquidatorMap } from './liqHistoryVisualizer.js';
 import { getTable } from './util/table.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { Program } from '@project-serum/anchor';
 
 config({path: './.env.local'});
 
@@ -135,12 +135,12 @@ class Liquidator {
     clearingHouse: ClearingHouse
     clearingHouseData: ClearingHouseData
     liquidatorAccountPublicKey: PublicKey
-    accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber>
+    accountSubscriberBucketMap : Map<Priority, PollingAccountsFetcher>
     userMap : Map<string, User>
-    lowPriorityBucket: PollingAccountSubscriber
-    mediumPriorityBucket: PollingAccountSubscriber
-    highPriorityBucket: PollingAccountSubscriber
-    clearingHouseSubscriber: PollingAccountSubscriber
+    lowPriorityBucket: PollingAccountsFetcher
+    mediumPriorityBucket: PollingAccountsFetcher
+    highPriorityBucket: PollingAccountsFetcher
+    clearingHouseSubscriber: PollingAccountsFetcher
     
 
     static async setupClearingHouseData(clearingHouse: ClearingHouse) {
@@ -241,23 +241,23 @@ class Liquidator {
         this.clearingHouseData = clearingHouseData;
         this.liquidatorAccountPublicKey = liquidatorAccountPublicKey;
 
-        this.accountSubscriberBucketMap = new Map<Priority, PollingAccountSubscriber>();
+        this.accountSubscriberBucketMap = new Map<Priority, PollingAccountsFetcher>();
         this.userMap = new Map<string, User>();
 
         // poll low priority accounts every 5 minutes
-        this.lowPriorityBucket = new PollingAccountSubscriber('low prio', this.clearingHouse.program, 0, 60 * 1000);
+        this.lowPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000);
         this.accountSubscriberBucketMap.set(Priority.low, this.lowPriorityBucket)
 
         // poll medium priority accounts every minute
-        this.mediumPriorityBucket = new PollingAccountSubscriber('medium prio', this.clearingHouse.program, 0, 10 * 1000);
+        this.mediumPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 10 * 1000);
         this.accountSubscriberBucketMap.set(Priority.medium, this.mediumPriorityBucket)
 
-        this.highPriorityBucket = new PollingAccountSubscriber('high prio', clearingHouse.program, 0, 5000);
+        this.highPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 1000);
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
-        this.clearingHouseSubscriber = new PollingAccountSubscriber('clearingHouse', clearingHouse.program, 0, 500);
+        this.clearingHouseSubscriber = new PollingAccountsFetcher(process.env.RPC_URL, 500);
 
-        this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'state', this.clearingHouseData.state, (data: StateAccount) => {
+        this.clearingHouseSubscriber.addProgram('state', this.clearingHouseData.state, this.clearingHouse.program as any, (data: StateAccount) => {
             // console.log('updated clearingHouse state');
             this.clearingHouseData.stateAccount = data;
         }, (error: any) => {
@@ -266,7 +266,7 @@ class Liquidator {
         });
 
         // this needs to update as fast a possible to get the most up to date margin ratio.
-        this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'markets', this.clearingHouseData.markets, (data: MarketsAccount) => {
+        this.clearingHouseSubscriber.addProgram('markets', this.clearingHouseData.markets, this.clearingHouse.program as any, (data: MarketsAccount) => {
             // console.log('updated clearingHouse markets');
             this.clearingHouseData.marketsAccount = data;
         }, (error: any) => {
@@ -274,7 +274,7 @@ class Liquidator {
             console.error(error);
         });
 
-        this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'liquidationHistory', this.clearingHouseData.liquidationHistory, (data: LiquidationHistoryAccount) => {
+        this.clearingHouseSubscriber.addProgram('liquidationHistory', this.clearingHouseData.liquidationHistory, this.clearingHouse.program as any,  (data: LiquidationHistoryAccount) => {
             // console.log('updated clearingHouse liquidationHistory');
             this.clearingHouseData.liquidationHistoryAccount = data;
         }, (error: any) => {
@@ -282,7 +282,7 @@ class Liquidator {
             console.error(error);
         });
 
-        this.clearingHouseSubscriber.addAccountToPoll(this.clearingHouse.program.programId.toBase58(), 'fundingRateHistory', this.clearingHouseData.fundingRateHistory, (data: FundingRateHistoryAccount) => {
+        this.clearingHouseSubscriber.addProgram('fundingRateHistory', this.clearingHouseData.fundingRateHistory, this.clearingHouse.program as any,  (data: FundingRateHistoryAccount) => {
             // console.log('updated clearingHouse fundingRate');
             this.clearingHouseData.fundingRateHistoryAccount = data;
         }, (error: any) => {
@@ -292,8 +292,8 @@ class Liquidator {
         
         this.setupUsers(this.getUsers().map(u => u as User)).then(() => {
 
-            this.accountSubscriberBucketMap.forEach(bucket => bucket.subscribe());
-            this.clearingHouseSubscriber.subscribe();
+            this.accountSubscriberBucketMap.forEach(bucket => bucket.start());
+            this.clearingHouseSubscriber.start();
 
         })
     }
@@ -491,7 +491,7 @@ class Liquidator {
                 this.usersToSetup = [];
                 // const endTime = process.hrtime(startTime);
                 // console.log('took ' + endTime[0] * 1000  + ' ms');
-                [...this.accountSubscriberBucketMap.keys()].forEach(key => this.accountSubscriberBucketMap.get(key).subscribe());
+                [...this.accountSubscriberBucketMap.keys()].forEach(key => this.accountSubscriberBucketMap.get(key).start());
             });
         }, 2000)
     }
@@ -603,11 +603,11 @@ class Liquidator {
         let newPrio = this.getPrio(user);
         if (currentPrio !== newPrio) {
             if (currentPrio !== undefined)
-            this.accountSubscriberBucketMap.get(currentPrio).removeAccountsToPoll(user.publicKey);
+            this.accountSubscriberBucketMap.get(currentPrio).accounts.delete(user.publicKey);
 
             this.userMap.set(user.publicKey, { ...user, prio: newPrio})
 
-            this.accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
+            this.accountSubscriberBucketMap.get(newPrio).addProgram('user', user.publicKey, this.clearingHouse.program as any, (data: UserAccount) => {
                 // console.log('updated user account data', user.publicKey);
                 this.userMap.set(user.publicKey, { ...this.userMap.get(user.publicKey), accountData: data } as User);
                 this.sortUser(this.userMap.get(user.publicKey));
@@ -617,7 +617,7 @@ class Liquidator {
                 // this.userMap.delete(user.publicKey);
             });
 
-            this.accountSubscriberBucketMap.get(newPrio).addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
+            this.accountSubscriberBucketMap.get(newPrio).addProgram('userPositions', user.positions, this.clearingHouse.program as any, (data: UserPositionsAccount) => {
                 // console.log('updated user positions data', data.user.toBase58());
                 const oldData = this.userMap.get(user.publicKey);
                 const newData = { ...oldData, positionsAccountData: data } as User;
@@ -805,9 +805,9 @@ class Liquidator {
         }
 
     }
-    async checkBucket (bucket: PollingAccountSubscriber) {
+    async checkBucket (bucket: PollingAccountsFetcher) {
         const start = process.hrtime();
-        const keys = bucket.getAllKeys();
+        const keys = [...bucket.accounts.keys()];
         await Promise.all(keys.map(async (key) => await this.checkForLiquidation(key)))
         this.numUsersChecked.push(keys.length)
         const time = process.hrtime(start);
