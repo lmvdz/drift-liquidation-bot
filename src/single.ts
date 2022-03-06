@@ -252,7 +252,7 @@ class Liquidator {
         this.mediumPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 10 * 1000);
         this.accountSubscriberBucketMap.set(Priority.medium, this.mediumPriorityBucket)
 
-        this.highPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 1000);
+        this.highPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 5000);
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
         this.clearingHouseSubscriber = new PollingAccountsFetcher(process.env.RPC_URL, 500);
@@ -291,7 +291,7 @@ class Liquidator {
         });
         
         this.setupUsers(this.getUsers().map(u => u as User)).then(() => {
-
+            
             this.accountSubscriberBucketMap.forEach(bucket => bucket.start());
             this.clearingHouseSubscriber.start();
 
@@ -311,18 +311,21 @@ class Liquidator {
     start () {
         // setup new users every minute
         this.intervals.push(setInterval(function(){
-            this.setupUsers(this.getUsers().map(u => u as User))
+            const liquidator = (this as Liquidator);
+            liquidator.setupUsers(liquidator.getUsers().map(u => u as User))
         }.bind(this), 60 * 1000));
         
 
         this.intervals.push(setInterval(function(){
-            this.sortUsers();
+            const liquidator = (this as Liquidator);
+            liquidator.sortUsers();
         }.bind(this), (60 * 1000)));
 
         // get blockhashes of multiple rpcs every second
         this.intervals.push(setInterval(async function(){
+            const liquidator = (this as Liquidator);
             try {
-                await this.getBlockhash();
+                await liquidator.getBlockhash();
             } catch (error) {
                 console.error(error);
             }
@@ -330,8 +333,9 @@ class Liquidator {
 
         // check the highPriorityBucket every x seconds
         this.intervals.push(setInterval(function() {
-            this.checkBucket(this.highPriorityBucket)
-            this.intervalCount++;
+            const liquidator = (this as Liquidator);
+            liquidator.checkBucket(this.highPriorityBucket)
+            liquidator.intervalCount++;
         }.bind(this), highPrioCheckUsersEveryMS));
 
 
@@ -345,13 +349,14 @@ class Liquidator {
 
         // print out the tables every x minutes
         this.intervals.push(setInterval(function () {
-            const margin = [...this.userMap.values()].map(u => u.marginRatio.toNumber())
+            const liquidator = (this as Liquidator);
+            const margin = [...liquidator.userMap.values()].map(u => u.marginRatio.toNumber())
             const data = {
-                userCount: this.userMap.size,
+                userCount: liquidator.userMap.size,
                 prio: {
-                    high: this.highPriorityBucket.accounts.length,
-                    medium: this.mediumPriorityBucket.accounts.length,
-                    low: this.lowPriorityBucket.accounts.length
+                    high: liquidator.highPriorityBucket.accounts.size,
+                    medium: liquidator.mediumPriorityBucket.accounts.size,
+                    low: liquidator.lowPriorityBucket.accounts.size
                 },
                 // intervalCount: intervalCount,
                 // checked: numUsersChecked,
@@ -359,10 +364,10 @@ class Liquidator {
                 // time: checkTime.reduce((a, b) => a+b, 0).toFixed(2) 
             }
 
-            this.print(data).then(() => {
-                this.intervalCount = 0
-                this.numUsersChecked = new Array<number>();
-                this.checkTime = new Array<number>();
+            liquidator.print(data).then(() => {
+                liquidator.intervalCount = 0
+                liquidator.numUsersChecked = new Array<number>();
+                liquidator.checkTime = new Array<number>();
             })
 
         }.bind(this), 60 * 1000 * workerLoopTimeInMinutes));
@@ -379,7 +384,8 @@ class Liquidator {
     getUsers() {
         if (fs.pathExistsSync('./storage/programUserAccounts')) {
             let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
-            return (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>)
+            usersFromFile = (JSON.parse(atob(usersFromFile)) as Array<{ publicKey: string, authority: string, positions: string }>);
+            return usersFromFile;
         } else {
             console.error('storage/programUserAccounts doesn\'t exist.... if the file is there and isn\'t empty, just start the bot again!')
             console.error('try using "npm run getUsers" before running the bot')
@@ -480,20 +486,23 @@ class Liquidator {
     
     }
     async setupUser (u : User) {
-        if (!this.usersToSetup.includes(u)) {
-            this.usersToSetup.push(u);
+        if (u !== undefined) {
+            if (!this.usersToSetup.includes(u)) {
+                this.usersToSetup.push(u);
+            }
+            clearTimeout(this.setupUsersTimeout)
+            this.setupUsersTimeout = setTimeout(() => {
+                console.log('setting up users');
+                // const startTime = process.hrtime();
+                this.setupUsers(this.usersToSetup).then(() => {
+                    this.usersToSetup = [];
+                    // const endTime = process.hrtime(startTime);
+                    // console.log('took ' + endTime[0] * 1000  + ' ms');
+                    [...this.accountSubscriberBucketMap.keys()].forEach(key => this.accountSubscriberBucketMap.get(key).start());
+                });
+            }, 2000)
         }
-        clearTimeout(this.setupUsersTimeout)
-        this.setupUsersTimeout = setTimeout(() => {
-            console.log('setting up users');
-            // const startTime = process.hrtime();
-            this.setupUsers(this.usersToSetup).then(() => {
-                this.usersToSetup = [];
-                // const endTime = process.hrtime(startTime);
-                // console.log('took ' + endTime[0] * 1000  + ' ms');
-                [...this.accountSubscriberBucketMap.keys()].forEach(key => this.accountSubscriberBucketMap.get(key).start());
-            });
-        }, 2000)
+        
     }
     async setupUsers (users: Array<User>) {
         let usersSetup = []
@@ -534,13 +543,13 @@ class Liquidator {
 
         const responses = flatDeep(await Promise.all(chunkedRequests.map((request, index) => 
                 new Promise((resolve) => {
-                    setTimeout(async () => {
+                    setTimeout(() => {
                         // console.log(index);
                         Promise.all(request.map(dataChunk => (
-                            new Promise((resolve) => {
+                            new Promise((resolveInner) => {
                                 //@ts-ignore
                                 axios.post(this.tpuConnection._rpcEndpoint, dataChunk).then(response => {
-                                    resolve(response.data);
+                                    resolveInner(response.data);
                                 })
                             })
                         ))).then(responses => {
@@ -595,7 +604,9 @@ class Liquidator {
         }
     }
     async sortUsers () {
-        [...this.userMap.values()].forEach(async user => this.sortUser(user));
+        const users = [...this.userMap.values()];
+        console.log('sorting ' + users.length + ' users');
+        users.forEach(async user => this.sortUser(user));
     }
     async sortUser(user: User) {
         user.marginRatio = this.getMarginRatio(user);
@@ -603,11 +614,11 @@ class Liquidator {
         let newPrio = this.getPrio(user);
         if (currentPrio !== newPrio) {
             if (currentPrio !== undefined)
-            this.accountSubscriberBucketMap.get(currentPrio).accounts.delete(user.publicKey);
+            this.accountSubscriberBucketMap.get(currentPrio).accounts.delete(user.publicKey)
 
-            this.userMap.set(user.publicKey, { ...user, prio: newPrio})
+            this.userMap.set( user.publicKey, { ...user, prio: newPrio } )
 
-            this.accountSubscriberBucketMap.get(newPrio).addProgram('user', user.publicKey, this.clearingHouse.program as any, (data: UserAccount) => {
+            this.accountSubscriberBucketMap.get( newPrio ).addProgram('user', user.publicKey, this.clearingHouse.program as any, (data: UserAccount) => {
                 // console.log('updated user account data', user.publicKey);
                 this.userMap.set(user.publicKey, { ...this.userMap.get(user.publicKey), accountData: data } as User);
                 this.sortUser(this.userMap.get(user.publicKey));
@@ -801,7 +812,7 @@ class Liquidator {
             }
             this.userMap.set(user.publicKey, user);
         } else {
-            console.warn('user undefined', pub, user)
+            this.userMap.delete(pub);
         }
 
     }
@@ -826,9 +837,9 @@ class Liquidator {
             let tx = this.wrapInTx(instruction);
             [... new Set([...this.recentBlockhashes.values()]).values()].forEach(async blkhash => {
                 tx.recentBlockhash = blkhash;
-                tx.feePayer = this.clearingHouse.wallet.publicKey
-                tx = await this.clearingHouse.wallet.signTransaction(tx)
-                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize())
+                tx.feePayer = this.clearingHouse.wallet.publicKey;
+                tx = await this.clearingHouse.wallet.signTransaction(tx);
+                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize());
             })
         } catch (error) {
             this.prepareUserLiquidationIX(user);
