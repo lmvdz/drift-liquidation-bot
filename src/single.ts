@@ -11,7 +11,6 @@ import {
     calculatePositionFundingPNL,
     ClearingHouse,
     Market,
-    PARTIAL_LIQUIDATION_RATIO,
     PRICE_TO_QUOTE_PRECISION,
     TEN_THOUSAND,
     UserAccount,
@@ -26,7 +25,8 @@ import {
     MarketsAccount,
     calculateMarkPrice,
     convertToNumber,
-    MARK_PRICE_PRECISION
+    MARK_PRICE_PRECISION,
+    MARGIN_PRECISION
 } from '@drift-labs/sdk';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -54,17 +54,17 @@ const workerLoopTimeInMinutes = 1
 const highPrioCheckUsersEveryMS = 5
 
 
+// unused
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 1
+// const partialLiquidationSlippage = 1
 
-const slipLiq = new BN(PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100)));
+// const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
-console.log(`liquidation ratio with slippage: ${slipLiq.toNumber()}`);
-
-// the margin ratio which determines which priority bucket the user will be a part of 
-const highPriorityMarginRatio = 1000
-const mediumPriorityMarginRatio = 2000
+// the liquidation distance determines which priority bucket the user will be a part of.
+// liquidation distance is totalCollateral / partialMarginRequirement
+const highPriorityLiquidationDistance = 1.5
+const mediumPriorityLiquidationDistance = 3
 
 interface User {
     publicKey: string,
@@ -76,6 +76,10 @@ interface User {
     ordersAccountData: UserOrdersAccount,
     liquidationInstruction: TransactionInstruction,
     marginRatio: BN,
+    partialMarginRequirement: BN,
+    totalPositionValue: BN,
+    unrealizedPNL: BN,
+    totalCollateral: BN,
     prio: Priority
 }
 
@@ -117,6 +121,15 @@ interface ClearingHouseData {
     fundingRateHistoryAccount: FundingRateHistoryAccount,
     markets: string,
     marketsAccount: MarketsAccount
+}
+
+interface LiquidationMath {
+    totalPositionValue: BN, 
+    unrealizedPNL: BN, 
+    marginRatio: BN, 
+    partialMarginRequirement: BN,
+    totalCollateral: BN
+
 }
 
 class Liquidator {
@@ -594,7 +607,7 @@ class Liquidator {
                     accountData: mappedUserAccounts[i],
                     positionsAccountData: mappedUserPositionAccounts[i]
                 }
-                user.marginRatio = this.getMarginRatio(user);
+                user = { ...user, ...this.getLiquidationMath(user) };
                 setTimeout(() => {
                     this.prepareUserLiquidationIX(user)
                 }, 1000 * i)
@@ -609,7 +622,7 @@ class Liquidator {
         users.forEach(async user => this.sortUser(user));
     }
     async sortUser(user: User) {
-        user.marginRatio = this.getMarginRatio(user);
+        user = { ...user, ...this.getLiquidationMath(user) };
         let currentPrio = user.prio;
         let newPrio = this.getPrio(user);
         if (currentPrio !== newPrio) {
@@ -631,8 +644,8 @@ class Liquidator {
             this.accountSubscriberBucketMap.get(newPrio).addProgram('userPositions', user.positions, this.clearingHouse.program as any, (data: UserPositionsAccount) => {
                 // console.log('updated user positions data', data.user.toBase58());
                 const oldData = this.userMap.get(user.publicKey);
-                const newData = { ...oldData, positionsAccountData: data } as User;
-                newData.marginRatio = this.getMarginRatio(newData);
+                let newData = { ...oldData, positionsAccountData: data } as User;
+                newData = { ...newData, ...this.getLiquidationMath(newData) };
                 this.userMap.set(user.publicKey, newData);
                 this.prepareUserLiquidationIX(newData);
                 this.sortUser(newData);
@@ -644,9 +657,25 @@ class Liquidator {
 
         }
     }
+    /**
+     * Calculate the priority of the user based on their marginRatio and marginRequirement
+     * @param {User} user the user which we are checking the priority of
+     * @returns {Priority} enum
+     */
     getPrio(user: User) {
-        return (user.marginRatio.lte(new BN(highPriorityMarginRatio)) ? Priority.high : (user.marginRatio.lte(new BN(mediumPriorityMarginRatio)) ? Priority.medium : Priority.low));
+        if (!user.partialMarginRequirement.eq(ZERO)) {
+            
+            const liqDistance = user.totalCollateral.toNumber() / user.partialMarginRequirement.toNumber();
+
+            return (liqDistance <= highPriorityLiquidationDistance ? Priority.high : liqDistance <= mediumPriorityLiquidationDistance ? Priority.medium : Priority.low);
+
+        } else {
+
+            return Priority.low
+
+        }
     }
+
     getLiquidateIx(
         user: User,
     ): TransactionInstruction {
@@ -765,19 +794,23 @@ class Liquidator {
     
         return pnlAssetAmount;
     }
-    getMarginRatio( user: User ) {
+
+
+    getLiquidationMath( user: User ) : LiquidationMath {
         const positions = user.positionsAccountData.positions;
         
         if (positions.length === 0) {
-            return BN_MAX;
+            return { marginRatio: BN_MAX, totalPositionValue: ZERO, unrealizedPNL: ZERO, partialMarginRequirement: ZERO } as LiquidationMath;
         }
     
-        let totalPositionValue = ZERO, unrealizedPNL = ZERO
+        let totalPositionValue = ZERO, unrealizedPNL = ZERO, partialMarginRequirement = ZERO
     
         positions.forEach(position => {
             const market = this.clearingHouseData.marketsAccount.markets[position.marketIndex.toNumber()];
             if (market !== undefined) {
                 const baseAssetAmountValue = calculateBaseAssetValue(market, position);
+                const marginRequirement = baseAssetAmountValue.mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
+                partialMarginRequirement = partialMarginRequirement.add(marginRequirement);
                 totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
                 unrealizedPNL = unrealizedPNL.add(this.calculatePositionPNL(market, position, baseAssetAmountValue, true));
             } else {
@@ -791,26 +824,29 @@ class Liquidator {
         // unrealizedPnLMap.set(user.publicKey, unrealizedPNL.toString());
     
         if (totalPositionValue.eq(ZERO)) {
-            return BN_MAX;
+            return { marginRatio: BN_MAX, totalPositionValue: ZERO, unrealizedPNL: ZERO, partialMarginRequirement: ZERO } as LiquidationMath;
         }
-    
-        return (
+        const totalCollateral = (
             user.accountData.collateral.add(unrealizedPNL) ??
             ZERO
-        ).mul(TEN_THOUSAND).div(totalPositionValue);
+        );
+        const marginRatio = totalCollateral.mul(TEN_THOUSAND).div(totalPositionValue);
+
+        return { totalCollateral, totalPositionValue, unrealizedPNL, marginRatio, partialMarginRequirement } ;
     }
+
     async checkForLiquidation (pub : string) {    
-        const user = this.userMap.get(pub)
+        let user = this.userMap.get(pub)
         if (user !== undefined) {
-            user.marginRatio = this.getMarginRatio(user);
-            if (user.marginRatio.lte(slipLiq)) {
+            user = { ...user, ...this.getLiquidationMath(user) };
+            this.userMap.set(user.publicKey, user);
+            if (user.totalCollateral.lte(user.partialMarginRequirement)) {
                 try {
                     this.liquidate(user);
                 } catch (error) {
                     console.error(error);
                 }
             }
-            this.userMap.set(user.publicKey, user);
         } else {
             this.userMap.delete(pub);
         }
