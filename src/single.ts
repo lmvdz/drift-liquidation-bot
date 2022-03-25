@@ -57,9 +57,9 @@ const highPrioCheckUsersEveryMS = 5
 // unused
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-// const partialLiquidationSlippage = 1
+const partialLiquidationSlippage = 2
 
-// const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
+const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
@@ -154,6 +154,7 @@ class Liquidator {
     mediumPriorityBucket: PollingAccountsFetcher
     highPriorityBucket: PollingAccountsFetcher
     clearingHouseSubscriber: PollingAccountsFetcher
+    liquidationGroup: Set<string>
     
 
     static async setupClearingHouseData(clearingHouse: ClearingHouse) {
@@ -237,6 +238,7 @@ class Liquidator {
     static async load() {
 
         const  tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 30 * 1000 } as ConnectionConfig );
+        // const tpuConnection = new Connection(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 30 * 1000 } as ConnectionConfig )
         const  clearingHouse = _.createClearingHouse(tpuConnection);
         const  liquidatorAccountPublicKey = (await PublicKey.findProgramAddress([Buffer.from(anchor.utils.bytes.utf8.encode('user')), clearingHouse.wallet.publicKey.toBuffer()], clearingHouse.program.programId))[0]
         const  clearingHouseData = await Liquidator.setupClearingHouseData(clearingHouse);
@@ -269,6 +271,8 @@ class Liquidator {
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
         this.clearingHouseSubscriber = new PollingAccountsFetcher(process.env.RPC_URL, 500);
+
+        this.liquidationGroup = new Set<string>();
 
         this.clearingHouseSubscriber.addProgram('state', this.clearingHouseData.state, this.clearingHouse.program as any, (data: StateAccount) => {
             // console.log('updated clearingHouse state');
@@ -323,37 +327,57 @@ class Liquidator {
     }
     start () {
         // setup new users every minute
-        this.intervals.push(setInterval(function(){
+        this.intervals.push(setInterval(async function(){
             const liquidator = (this as Liquidator);
             liquidator.setupUsers(liquidator.getUsers().map(u => u as User))
         }.bind(this), 60 * 1000));
         
 
-        this.intervals.push(setInterval(function(){
+        this.intervals.push(setInterval(async function(){
             const liquidator = (this as Liquidator);
             liquidator.sortUsers();
         }.bind(this), (60 * 1000)));
 
         // get blockhashes of multiple rpcs every second
-        this.intervals.push(setInterval(async function(){
-            const liquidator = (this as Liquidator);
-            try {
-                await liquidator.getBlockhash();
-            } catch (error) {
-                console.error(error);
-            }
-        }.bind(this), 1000));
+        // this.intervals.push(setInterval(async function(){
+        //     const liquidator = (this as Liquidator);
+        //     try {
+        //         await liquidator.getBlockhash();
+        //     } catch (error) {
+        //         console.error(error);
+        //     }
+        // }.bind(this), 1000));
 
         // check the highPriorityBucket every x seconds
-        this.intervals.push(setInterval(function() {
+        this.intervals.push(setInterval(async function() {
+
             const liquidator = (this as Liquidator);
+
+            liquidator.liquidationGroup.forEach(async liquidatee => {
+                let user = liquidator.userMap.get(liquidatee);
+
+                if (user === undefined) {
+                    return liquidator.liquidationGroup.delete(liquidatee);  
+                }
+
+                user = { ...user, ...this.getLiquidationMath(user) };
+
+                if (user.totalCollateral.gt(slipLiq(user.partialMarginRequirement))) {
+                    return liquidator.liquidationGroup.delete(liquidatee);
+                }
+                
+                liquidator.liquidate(user);
+                this.userMap.set(user.publicKey, user);
+            });
+
             liquidator.checkBucket(this.highPriorityBucket)
             liquidator.intervalCount++;
+
         }.bind(this), highPrioCheckUsersEveryMS));
 
 
         // print the memory usage every 5 seconds
-        this.intervals.push(setInterval(function () {
+        this.intervals.push(setInterval(async function () {
             // console.clear();
             console.log(`total mem usage: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`)
             // console.log(`low: ${lowPriorityBucket.getAllKeys().length}, medium: ${mediumPriorityBucket.getAllKeys().length}, high: ${highPriorityBucket.getAllKeys().length}`)
@@ -361,7 +385,7 @@ class Liquidator {
 
 
         // print out the tables every x minutes
-        this.intervals.push(setInterval(function () {
+        this.intervals.push(setInterval(async function () {
             const liquidator = (this as Liquidator);
             const margin = [...liquidator.userMap.values()].map(u => u.marginRatio.toNumber())
             const data = {
@@ -826,10 +850,12 @@ class Liquidator {
         if (totalPositionValue.eq(ZERO)) {
             return { marginRatio: BN_MAX, totalPositionValue: ZERO, unrealizedPNL: ZERO, partialMarginRequirement: ZERO } as LiquidationMath;
         }
+
         const totalCollateral = (
             user.accountData.collateral.add(unrealizedPNL) ??
             ZERO
         );
+
         const marginRatio = totalCollateral.mul(TEN_THOUSAND).div(totalPositionValue);
 
         return { totalCollateral, totalPositionValue, unrealizedPNL, marginRatio, partialMarginRequirement } ;
@@ -837,20 +863,23 @@ class Liquidator {
 
     async checkForLiquidation (pub : string) {    
         let user = this.userMap.get(pub)
-        if (user !== undefined) {
-            user = { ...user, ...this.getLiquidationMath(user) };
-            this.userMap.set(user.publicKey, user);
-            if (user.totalCollateral.lte(user.partialMarginRequirement)) {
-                try {
-                    this.liquidate(user);
-                } catch (error) {
-                    console.error(error);
+        if (!this.liquidationGroup.has(pub)) {
+            if (user !== undefined) {
+                user = { ...user, ...this.getLiquidationMath(user) };
+                this.userMap.set(user.publicKey, user);
+                if (user.totalCollateral.lte(slipLiq(user.partialMarginRequirement))) {
+                    try {
+                        this.liquidationGroup.add(pub);
+                        this.liquidate(user);
+                    } catch (error) {
+                        console.error(error);
+                    }
                 }
+            } else {
+                this.userMap.delete(pub);
             }
-        } else {
-            this.userMap.delete(pub);
         }
-
+        
     }
     async checkBucket (bucket: PollingAccountsFetcher) {
         const start = process.hrtime();
@@ -863,6 +892,9 @@ class Liquidator {
     wrapInTx(instruction: TransactionInstruction) : Transaction {
         return new Transaction().add(instruction);
     }
+    getLiquidationSize (user: User) {
+        user.totalPositionValue
+    }
     async liquidate(user: User) : Promise<void> {
         let instruction = user.liquidationInstruction
         if (instruction === undefined) {
@@ -871,12 +903,24 @@ class Liquidator {
         try {
             console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()), user.positionsAccountData.positions.length);
             let tx = this.wrapInTx(instruction);
-            [... new Set([...this.recentBlockhashes.values()]).values()].forEach(async blkhash => {
-                tx.recentBlockhash = blkhash;
-                tx.feePayer = this.clearingHouse.wallet.publicKey;
-                tx = await this.clearingHouse.wallet.signTransaction(tx);
-                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize());
-            })
+            tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
+            tx.feePayer = this.clearingHouse.wallet.publicKey;
+            tx = await this.clearingHouse.wallet.signTransaction(tx);
+
+            try {
+                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
+            } catch {
+                this.prepareUserLiquidationIX(user);
+            }
+
+            try {
+                this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
+            } catch (error) {
+                this.prepareUserLiquidationIX(user);
+            }
+            
+            
+            
         } catch (error) {
             this.prepareUserLiquidationIX(user);
         }
