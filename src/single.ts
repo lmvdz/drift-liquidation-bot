@@ -156,9 +156,6 @@ function flatDeep(arr : Array<any>, d = 1) : Array<any> {
 }
 
 
-const blacklistAuthority = ['5jdnNir8fdbQPjFvUxNJsXEKL25Z5FnzGv3aWGDVSwZr']
-
-
 
 class Liquidator {
     intervals: Array<NodeJS.Timer> = [];
@@ -167,11 +164,6 @@ class Liquidator {
     intervalCount = 0
     numUsersChecked = new Array<number>();
     checkTime = new Array<number>();
-    blockhashIndex = -1;
-    recentBlockhashes : Map<number, string> = new Map<number, string>();
-    ankr = new Connection('https://solana.public-rpc.com', { commitment: 'processed' });
-    mainnetRPC = new Connection('https://api.mainnet-beta.solana.com', { commitment: 'processed' });
-    rpcPool = new Connection('https://free.rpcpool.com', { commitment: 'processed' } );
     tpuConnection: TpuConnection
     clearingHouse: ClearingHouse
     clearingHouseData: ClearingHouseData
@@ -450,16 +442,6 @@ class Liquidator {
             })
 
         }.bind(this), 60 * 1000 * workerLoopTimeInMinutes));
-    }
-
-    async getBlockhash() : Promise<void> {
-        try {
-            this.recentBlockhashes.set(0, (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash);
-        } catch (error) {}
-        try { this.recentBlockhashes.set(1, (await this.clearingHouse.connection.getRecentBlockhash()).blockhash); } catch (error) {}
-        try { this.recentBlockhashes.set(2, (await this.mainnetRPC.getRecentBlockhash()).blockhash); } catch (error) {}
-        try { this.recentBlockhashes.set(3, (await this.rpcPool.getRecentBlockhash()).blockhash); } catch (error) {}
-        try { this.recentBlockhashes.set(4, (await this.ankr.getRecentBlockhash()).blockhash); } catch (error) {}
     }
 
     getEmptyPosition(marketIndex: BN) {
