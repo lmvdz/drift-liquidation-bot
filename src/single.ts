@@ -390,15 +390,17 @@ class Liquidator {
                     return liquidator.liquidationGroup.delete(liquidatee);  
                 }
 
-                liquidator.liquidate(user);
-
                 user.liquidationMath = this.getLiquidationMath(user)
+
+                this.userMap.set(user.publicKey, user);
 
                 if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement))) {
                     return liquidator.liquidationGroup.delete(liquidatee);
                 }
+
+                liquidator.liquidate(user);
                 
-                this.userMap.set(user.publicKey, user);
+                
             });
 
         }.bind(this), liquidateEveryMS));
@@ -1068,31 +1070,24 @@ class Liquidator {
         }
     
         
-        positions.forEach(position => {
+        positions.forEach(async position => {
             const market = this.clearingHouseData.marketsAccount.markets[position.marketIndex.toNumber()];
             if (market !== undefined) {
-
-                // get base asset value
-                const baseAssetAmountValue = calculateBaseAssetValue(market, position);
                 // store in per market object
-                liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()] = baseAssetAmountValue;
+                liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()] = calculateBaseAssetValue(market, position);
                 // add to total
-                liquidationMath.totalPositionValue = liquidationMath.totalPositionValue.add(baseAssetAmountValue);
+                liquidationMath.totalPositionValue = liquidationMath.totalPositionValue.add(liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()]);
 
-                // get margin requirement
-                const marginRequirement = baseAssetAmountValue.mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
                 // store in per market object
-                liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()] = marginRequirement;
+                liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()] = liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()].mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
                 // add to total
-                liquidationMath.partialMarginRequirement = liquidationMath.partialMarginRequirement.add(marginRequirement);
+                liquidationMath.partialMarginRequirement = liquidationMath.partialMarginRequirement.add(liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()]);
                 
 
-                // get unrealizedPNL
-                const unrealizedPNL = this.calculatePositionPNL(market, position, baseAssetAmountValue, true)
                 // store in per market object
-                liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()] = unrealizedPNL
+                liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()] = this.calculatePositionPNL(market, position, liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()], true)
                 // add to total
-                liquidationMath.unrealizedPNL = unrealizedPNL.add(unrealizedPNL);
+                liquidationMath.unrealizedPNL = liquidationMath.unrealizedPNL.add(liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()]);
 
 
                 // get liquidationPrice
@@ -1129,14 +1124,17 @@ class Liquidator {
         
         if (user !== undefined) {
             if (!this.liquidationGroup.has(pub)) {
-                console.log(pub)
-                Object.keys(user.liquidationMath.marketLiquidationPrice).forEach(key => {
-                    console.log(Markets[Number(key)].symbol, user.positionsAccountData.positions[Number(key)].baseAssetAmount.div(BASE_PRECISION).toNumber(), (user.liquidationMath.marketLiquidationPrice[key] as BN).div(QUOTE_PRECISION).toNumber());
-                });
-                console.log('');
                 user.liquidationMath = this.getLiquidationMath(user)
+                const slip = slipLiq(user.liquidationMath.partialMarginRequirement);
+                // console.log(pub)
+                // Object.keys(user.liquidationMath.marketLiquidationPrice).forEach(key => {
+                //     console.log(Markets[Number(key)].symbol, user.positionsAccountData.positions.find(position => position.marketIndex.toNumber() === Number(key)).baseAssetAmount.div(BASE_PRECISION).toNumber(), (user.liquidationMath.marketLiquidationPrice[key] as BN).div(QUOTE_PRECISION).toNumber());
+                // });
+                // console.log(user.liquidationMath.totalCollateral.toNumber(), slip.toNumber())
+                // console.log('');
+                
                 this.userMap.set(user.publicKey, user);
-                if (user.liquidationMath.totalCollateral.lte(slipLiq(user.liquidationMath.partialMarginRequirement))) {
+                if (user.liquidationMath.totalCollateral.lte(slip)) {
                     try {
                         this.liquidationGroup.add(pub);
                         this.liquidate(user);
@@ -1168,7 +1166,7 @@ class Liquidator {
         }
         try {
             
-            console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()), user.positionsAccountData.positions.length);
+            console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.liquidationMath.totalCollateral.toNumber(), user.liquidationMath.partialMarginRequirement.toNumber(), new Date(Date.now()));
             let tx = this.wrapInTx(instruction);
             tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
             tx.feePayer = this.clearingHouse.wallet.publicKey;
