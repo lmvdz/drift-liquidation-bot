@@ -26,7 +26,14 @@ import {
     calculateMarkPrice,
     convertToNumber,
     MARK_PRICE_PRECISION,
-    MARGIN_PRECISION
+    MARGIN_PRECISION,
+    MarginCategory,
+    AMM_RESERVE_PRECISION,
+    PositionDirection,
+    calculateTradeSlippage,
+    calculateNewMarketAfterTrade,
+    QUOTE_PRECISION,
+    BASE_PRECISION
 } from '@drift-labs/sdk';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -51,13 +58,15 @@ const workerLoopTimeInMinutes = 1
 
 
 // check priority every X ms
-const highPrioCheckUsersEveryMS = 5
+const highPrioCheckUsersEveryMS = 100
+
+const liquidateEveryMS = 5
 
 
 // unused
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 2
+const partialLiquidationSlippage = 3
 
 const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
@@ -76,11 +85,56 @@ interface User {
     ordersAccountData: UserOrdersAccount,
     liquidationInstruction: TransactionInstruction,
     marginRatio: BN,
+    prio: Priority,
+    liquidationMath: LiquidationMath
+    
+}
+
+type MarketBaseAssetAmounts = {
+    [key: number]: BN
+}
+
+type MarketMarginRequirement = {
+    [key: number]: BN
+}
+
+type MarketUnrealizedPnL = {
+    [key: number]: BN
+}
+
+type MarketLiquidationPrice = {
+    [key: number]: BN
+}
+
+interface MarketFunding {
+    marketId: number,
+    marketSymbol: string,
+    ts: number,
+    rate: string
+}
+
+interface ClearingHouseData {
+    state: string,
+    stateAccount: StateAccount,
+    liquidationHistory: string,
+    liquidationHistoryAccount: LiquidationHistoryAccount,
+    fundingRateHistory: string,
+    fundingRateHistoryAccount: FundingRateHistoryAccount,
+    markets: string,
+    marketsAccount: MarketsAccount
+}
+
+interface LiquidationMath {
+    totalPositionValue: BN, 
+    unrealizedPNL: BN, 
+    marginRatio: BN, 
     partialMarginRequirement: BN,
-    totalPositionValue: BN,
-    unrealizedPNL: BN,
-    totalCollateral: BN,
-    prio: Priority
+    totalCollateral: BN
+    marketBaseAssetAmount: MarketBaseAssetAmounts
+    marketMarginRequirement: MarketMarginRequirement
+    marketUnrealizedPnL: MarketUnrealizedPnL
+    marketLiquidationPrice: MarketLiquidationPrice
+
 }
 
 enum Priority {
@@ -102,35 +156,9 @@ function flatDeep(arr : Array<any>, d = 1) : Array<any> {
 }
 
 
-// used for the funding table
-interface MarketFunding {
-    marketId: number,
-    marketSymbol: string,
-    ts: number,
-    rate: string
-}
-
 const blacklistAuthority = ['5jdnNir8fdbQPjFvUxNJsXEKL25Z5FnzGv3aWGDVSwZr']
 
-interface ClearingHouseData {
-    state: string,
-    stateAccount: StateAccount,
-    liquidationHistory: string,
-    liquidationHistoryAccount: LiquidationHistoryAccount,
-    fundingRateHistory: string,
-    fundingRateHistoryAccount: FundingRateHistoryAccount,
-    markets: string,
-    marketsAccount: MarketsAccount
-}
 
-interface LiquidationMath {
-    totalPositionValue: BN, 
-    unrealizedPNL: BN, 
-    marginRatio: BN, 
-    partialMarginRequirement: BN,
-    totalCollateral: BN
-
-}
 
 class Liquidator {
     intervals: Array<NodeJS.Timer> = [];
@@ -235,6 +263,7 @@ class Liquidator {
     
         return barebonesClearingHouse;
     }
+    
     static async load() {
 
         const  tpuConnection = await TpuConnection.load(process.env.RPC_URL, { commitment: 'processed', confirmTransactionInitialTimeout: 30 * 1000 } as ConnectionConfig );
@@ -245,6 +274,7 @@ class Liquidator {
 
         return new Liquidator(tpuConnection, clearingHouse, clearingHouseData, liquidatorAccountPublicKey);
     }
+
     constructor(tpuConnection: TpuConnection, clearingHouse: ClearingHouse, clearingHouseData: ClearingHouseData, liquidatorAccountPublicKey: PublicKey) {
 
         // setInterval(async () => {
@@ -278,7 +308,6 @@ class Liquidator {
             // console.log('updated clearingHouse state');
             this.clearingHouseData.stateAccount = data;
         }, (error: any) => {
-            console.log('here2');
             console.error(error);
         });
 
@@ -287,7 +316,6 @@ class Liquidator {
             // console.log('updated clearingHouse markets');
             this.clearingHouseData.marketsAccount = data;
         }, (error: any) => {
-            console.log('here3');
             console.error(error);
         });
 
@@ -295,15 +323,13 @@ class Liquidator {
             // console.log('updated clearingHouse liquidationHistory');
             this.clearingHouseData.liquidationHistoryAccount = data;
         }, (error: any) => {
-            console.log('here4');
             console.error(error);
         });
 
         this.clearingHouseSubscriber.addProgram('fundingRateHistory', this.clearingHouseData.fundingRateHistory, this.clearingHouse.program as any,  (data: FundingRateHistoryAccount) => {
             // console.log('updated clearingHouse fundingRate');
             this.clearingHouseData.fundingRateHistoryAccount = data;
-        }, (error: any) => {
-            console.log('here5');
+        }, (error: any) => { 
             console.error(error);
         });
         
@@ -314,6 +340,7 @@ class Liquidator {
 
         })
     }
+
     loop() {
         try {
             this.start();
@@ -322,9 +349,11 @@ class Liquidator {
             this.loop();
         }
     }
+
     stop() {
         this.intervals.forEach(i => clearInterval(i))
     }
+    
     start () {
         // setup new users every minute
         this.intervals.push(setInterval(async function(){
@@ -348,7 +377,8 @@ class Liquidator {
         //     }
         // }.bind(this), 1000));
 
-        // check the highPriorityBucket every x seconds
+
+
         this.intervals.push(setInterval(async function() {
 
             const liquidator = (this as Liquidator);
@@ -360,15 +390,25 @@ class Liquidator {
                     return liquidator.liquidationGroup.delete(liquidatee);  
                 }
 
-                user = { ...user, ...this.getLiquidationMath(user) };
+                liquidator.liquidate(user);
 
-                if (user.totalCollateral.gt(slipLiq(user.partialMarginRequirement))) {
+                user.liquidationMath = this.getLiquidationMath(user)
+
+                if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement))) {
                     return liquidator.liquidationGroup.delete(liquidatee);
                 }
                 
-                liquidator.liquidate(user);
                 this.userMap.set(user.publicKey, user);
             });
+
+        }.bind(this), liquidateEveryMS));
+
+
+
+        // check the highPriorityBucket every x seconds
+        this.intervals.push(setInterval(async function() {
+
+            const liquidator = (this as Liquidator);
 
             liquidator.checkBucket(this.highPriorityBucket)
             liquidator.intervalCount++;
@@ -387,7 +427,7 @@ class Liquidator {
         // print out the tables every x minutes
         this.intervals.push(setInterval(async function () {
             const liquidator = (this as Liquidator);
-            const margin = [...liquidator.userMap.values()].map(u => u.marginRatio.toNumber())
+            const margin = [...liquidator.userMap.values()].map(u => u.liquidationMath.marginRatio.toNumber())
             const data = {
                 userCount: liquidator.userMap.size,
                 prio: {
@@ -409,6 +449,7 @@ class Liquidator {
 
         }.bind(this), 60 * 1000 * workerLoopTimeInMinutes));
     }
+
     async getBlockhash() : Promise<void> {
         try {
             this.recentBlockhashes.set(0, (await axios.post('https://demo.theindex.io', {"jsonrpc":"2.0","id":1, "method":"getRecentBlockhash", "params": [ { commitment: 'processed'}] })).data.result.value.blockhash);
@@ -418,6 +459,192 @@ class Liquidator {
         try { this.recentBlockhashes.set(3, (await this.rpcPool.getRecentBlockhash()).blockhash); } catch (error) {}
         try { this.recentBlockhashes.set(4, (await this.ankr.getRecentBlockhash()).blockhash); } catch (error) {}
     }
+
+    getEmptyPosition(marketIndex: BN) {
+        return {
+			baseAssetAmount: ZERO,
+			lastCumulativeFundingRate: ZERO,
+			marketIndex,
+			quoteAssetAmount: ZERO,
+			openOrders: ZERO,
+		};
+    }
+
+    getMaxLeverage(
+		marketIndex: BN,
+		category: MarginCategory = 'Initial'
+	): BN {
+		const market = this.clearingHouseData.marketsAccount.markets[marketIndex.toNumber()];
+		let marginRatioCategory: number;
+
+		switch (category) {
+			case 'Initial':
+				marginRatioCategory = market.marginRatioInitial;
+				break;
+			case 'Maintenance':
+				marginRatioCategory = market.marginRatioMaintenance;
+				break;
+			case 'Partial':
+				marginRatioCategory = market.marginRatioPartial;
+				break;
+			default:
+				marginRatioCategory = market.marginRatioInitial;
+				break;
+		}
+		const maxLeverage = TEN_THOUSAND.mul(TEN_THOUSAND).div(
+			new BN(marginRatioCategory)
+		);
+		return maxLeverage;
+	}
+    liquidationPrice(
+        user: User,
+        liquidationMath: LiquidationMath,
+        clearingHouseData: ClearingHouseData,
+		marketPosition: Pick<UserPosition, 'marketIndex'>,
+		positionBaseSizeChange: BN = ZERO,
+		partial = false
+	): BN {
+		// solves formula for example canBeLiquidated below
+
+		/* example: assume BTC price is $40k (examine 10% up/down)
+
+        if 10k deposit and levered 10x short BTC => BTC up $400 means:
+        1. higher base_asset_value (+$4k)
+        2. lower collateral (-$4k)
+        3. (10k - 4k)/(100k + 4k) => 6k/104k => .0576
+
+        for 10x long, BTC down $400:
+        3. (10k - 4k) / (100k - 4k) = 6k/96k => .0625 */
+
+		const totalCollateral = liquidationMath.totalCollateral;
+
+		// calculate the total position value ignoring any value from the target market of the trade
+		const totalPositionValueExcludingTargetMarket = liquidationMath.totalPositionValue.sub(liquidationMath.marketBaseAssetAmount[marketPosition.marketIndex.toNumber()]);
+
+		const currentMarketPosition =
+            user.positionsAccountData.positions.find(p => p.marketIndex.eq(marketPosition.marketIndex)) || this.getEmptyPosition(marketPosition.marketIndex);
+
+		const currentMarketPositionBaseSize = currentMarketPosition.baseAssetAmount;
+
+		const proposedBaseAssetAmount = currentMarketPositionBaseSize.add(
+			positionBaseSizeChange
+		);
+
+		// calculate position for current market after trade
+		const proposedMarketPosition: UserPosition = {
+			marketIndex: marketPosition.marketIndex,
+			baseAssetAmount: proposedBaseAssetAmount,
+			lastCumulativeFundingRate:
+				currentMarketPosition.lastCumulativeFundingRate,
+			quoteAssetAmount: new BN(0),
+			openOrders: new BN(0),
+		};
+
+		if (proposedBaseAssetAmount.eq(ZERO)) return new BN(-1);
+
+		const market = clearingHouseData.marketsAccount.markets[proposedMarketPosition.marketIndex.toNumber()]
+
+		const proposedMarketPositionValue = calculateBaseAssetValue(
+			market,
+			proposedMarketPosition
+		);
+
+		// total position value after trade
+		const totalPositionValueAfterTrade =
+			totalPositionValueExcludingTargetMarket.add(proposedMarketPositionValue);
+
+		const marginRequirementExcludingTargetMarket =
+			user.positionsAccountData.positions.reduce(
+				(totalMarginRequirement, position) => {
+					if (!position.marketIndex.eq(marketPosition.marketIndex)) {
+						const market = this.clearingHouseData.marketsAccount.markets[position.marketIndex.toNumber()];
+						const positionValue = calculateBaseAssetValue(market, position);
+						const marketMarginRequirement = positionValue
+							.mul(
+								partial
+									? new BN(market.marginRatioPartial)
+									: new BN(market.marginRatioMaintenance)
+							)
+							.div(MARGIN_PRECISION);
+						totalMarginRequirement = totalMarginRequirement.add(
+							marketMarginRequirement
+						);
+					}
+					return totalMarginRequirement;
+				},
+				ZERO
+			);
+
+		const freeCollateralExcludingTargetMarket = totalCollateral.sub(
+			marginRequirementExcludingTargetMarket
+		);
+
+		// if the position value after the trade is less than free collateral, there is no liq price
+		if (
+			totalPositionValueAfterTrade.lte(freeCollateralExcludingTargetMarket) &&
+			proposedMarketPosition.baseAssetAmount.abs().gt(ZERO)
+		) {
+			return new BN(-1);
+		}
+
+		const marginRequirementAfterTrade =
+			marginRequirementExcludingTargetMarket.add(
+				proposedMarketPositionValue
+					.mul(
+						partial
+							? new BN(market.marginRatioPartial)
+							: new BN(market.marginRatioMaintenance)
+					)
+					.div(MARGIN_PRECISION)
+			);
+		const freeCollateralAfterTrade = totalCollateral.sub(
+			marginRequirementAfterTrade
+		);
+
+		const marketMaxLeverage = partial
+			? this.getMaxLeverage(proposedMarketPosition.marketIndex, 'Partial')
+			: this.getMaxLeverage(proposedMarketPosition.marketIndex, 'Maintenance');
+
+		let priceDelta;
+		if (proposedBaseAssetAmount.lt(ZERO)) {
+			priceDelta = freeCollateralAfterTrade
+				.mul(marketMaxLeverage) // precision is TEN_THOUSAND
+				.div(marketMaxLeverage.add(TEN_THOUSAND))
+				.mul(PRICE_TO_QUOTE_PRECISION)
+				.mul(AMM_RESERVE_PRECISION)
+				.div(proposedBaseAssetAmount);
+		} else {
+			priceDelta = freeCollateralAfterTrade
+				.mul(marketMaxLeverage) // precision is TEN_THOUSAND
+				.div(marketMaxLeverage.sub(TEN_THOUSAND))
+				.mul(PRICE_TO_QUOTE_PRECISION)
+				.mul(AMM_RESERVE_PRECISION)
+				.div(proposedBaseAssetAmount);
+		}
+
+		let markPriceAfterTrade;
+		if (positionBaseSizeChange.eq(ZERO)) {
+			markPriceAfterTrade = calculateMarkPrice(
+				this.clearingHouseData.marketsAccount.markets[marketPosition.marketIndex.toNumber()]
+			);
+		} else {
+			const direction = positionBaseSizeChange.gt(ZERO)
+				? PositionDirection.LONG
+				: PositionDirection.SHORT;
+			markPriceAfterTrade = calculateTradeSlippage(
+				direction,
+				positionBaseSizeChange.abs(),
+				this.clearingHouseData.marketsAccount.markets[marketPosition.marketIndex.toNumber()],
+				'base'
+			)[3]; // newPrice after swap
+		}
+
+		if (priceDelta.gt(markPriceAfterTrade)) {
+			return new BN(-1);
+		}
+
+		return markPriceAfterTrade.sub(priceDelta);
+	}
     getUsers() {
         if (fs.pathExistsSync('./storage/programUserAccounts')) {
             let usersFromFile = fs.readFileSync('./storage/programUserAccounts', "utf8");
@@ -631,7 +858,7 @@ class Liquidator {
                     accountData: mappedUserAccounts[i],
                     positionsAccountData: mappedUserPositionAccounts[i]
                 }
-                user = { ...user, ...this.getLiquidationMath(user) };
+                user.liquidationMath = this.getLiquidationMath(user)
                 setTimeout(() => {
                     this.prepareUserLiquidationIX(user)
                 }, 1000 * i)
@@ -646,7 +873,7 @@ class Liquidator {
         users.forEach(async user => this.sortUser(user));
     }
     async sortUser(user: User) {
-        user = { ...user, ...this.getLiquidationMath(user) };
+        user.liquidationMath = this.getLiquidationMath(user)
         let currentPrio = user.prio;
         let newPrio = this.getPrio(user);
         if (currentPrio !== newPrio) {
@@ -669,7 +896,7 @@ class Liquidator {
                 // console.log('updated user positions data', data.user.toBase58());
                 const oldData = this.userMap.get(user.publicKey);
                 let newData = { ...oldData, positionsAccountData: data } as User;
-                newData = { ...newData, ...this.getLiquidationMath(newData) };
+                newData.liquidationMath = this.getLiquidationMath(newData);
                 this.userMap.set(user.publicKey, newData);
                 this.prepareUserLiquidationIX(newData);
                 this.sortUser(newData);
@@ -687,9 +914,9 @@ class Liquidator {
      * @returns {Priority} enum
      */
     getPrio(user: User) {
-        if (!user.partialMarginRequirement.eq(ZERO)) {
+        if (!user.liquidationMath.partialMarginRequirement.eq(ZERO)) {
             
-            const liqDistance = user.totalCollateral.toNumber() / user.partialMarginRequirement.toNumber();
+            const liqDistance = user.liquidationMath.totalCollateral.toNumber() / user.liquidationMath.partialMarginRequirement.toNumber();
 
             return (liqDistance <= highPriorityLiquidationDistance ? Priority.high : liqDistance <= mediumPriorityLiquidationDistance ? Priority.medium : Priority.low);
 
@@ -822,21 +1049,57 @@ class Liquidator {
 
     getLiquidationMath( user: User ) : LiquidationMath {
         const positions = user.positionsAccountData.positions;
-        
+
+        const liquidationMath = {
+            totalCollateral: ZERO, 
+            marginRatio: BN_MAX, 
+            totalPositionValue: ZERO, 
+            unrealizedPNL: ZERO, 
+            partialMarginRequirement: ZERO, 
+            marketBaseAssetAmount: {} as MarketBaseAssetAmounts, 
+            marketMarginRequirement: {} as MarketMarginRequirement, 
+            marketUnrealizedPnL: {} as MarketUnrealizedPnL,
+            marketLiquidationPrice: {} as MarketLiquidationPrice
+        } as LiquidationMath
+
+
         if (positions.length === 0) {
-            return { marginRatio: BN_MAX, totalPositionValue: ZERO, unrealizedPNL: ZERO, partialMarginRequirement: ZERO } as LiquidationMath;
+            return liquidationMath;
         }
     
-        let totalPositionValue = ZERO, unrealizedPNL = ZERO, partialMarginRequirement = ZERO
-    
+        
         positions.forEach(position => {
             const market = this.clearingHouseData.marketsAccount.markets[position.marketIndex.toNumber()];
             if (market !== undefined) {
+
+                // get base asset value
                 const baseAssetAmountValue = calculateBaseAssetValue(market, position);
+                // store in per market object
+                liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()] = baseAssetAmountValue;
+                // add to total
+                liquidationMath.totalPositionValue = liquidationMath.totalPositionValue.add(baseAssetAmountValue);
+
+                // get margin requirement
                 const marginRequirement = baseAssetAmountValue.mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
-                partialMarginRequirement = partialMarginRequirement.add(marginRequirement);
-                totalPositionValue = totalPositionValue.add(baseAssetAmountValue);
-                unrealizedPNL = unrealizedPNL.add(this.calculatePositionPNL(market, position, baseAssetAmountValue, true));
+                // store in per market object
+                liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()] = marginRequirement;
+                // add to total
+                liquidationMath.partialMarginRequirement = liquidationMath.partialMarginRequirement.add(marginRequirement);
+                
+
+                // get unrealizedPNL
+                const unrealizedPNL = this.calculatePositionPNL(market, position, baseAssetAmountValue, true)
+                // store in per market object
+                liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()] = unrealizedPNL
+                // add to total
+                liquidationMath.unrealizedPNL = unrealizedPNL.add(unrealizedPNL);
+
+
+                // get liquidationPrice
+                const liquidationPrice = this.liquidationPrice(user, liquidationMath, this.clearingHouseData, position)
+                // store in per market object
+                liquidationMath.marketLiquidationPrice[position.marketIndex.toNumber()] = liquidationPrice;
+
             } else {
                 console.log(user.accountData.positions.toBase58(), user.publicKey);
                 console.log(market, position.marketIndex.toString());
@@ -847,27 +1110,33 @@ class Liquidator {
     
         // unrealizedPnLMap.set(user.publicKey, unrealizedPNL.toString());
     
-        if (totalPositionValue.eq(ZERO)) {
-            return { marginRatio: BN_MAX, totalPositionValue: ZERO, unrealizedPNL: ZERO, partialMarginRequirement: ZERO } as LiquidationMath;
+        if (liquidationMath.totalPositionValue.eq(ZERO)) {
+            return liquidationMath;
         }
 
-        const totalCollateral = (
-            user.accountData.collateral.add(unrealizedPNL) ??
+        liquidationMath.totalCollateral = (
+            user.accountData.collateral.add(liquidationMath.unrealizedPNL) ??
             ZERO
         );
 
-        const marginRatio = totalCollateral.mul(TEN_THOUSAND).div(totalPositionValue);
+        liquidationMath.marginRatio = liquidationMath.totalCollateral.mul(TEN_THOUSAND).div(liquidationMath.totalPositionValue);
 
-        return { totalCollateral, totalPositionValue, unrealizedPNL, marginRatio, partialMarginRequirement } ;
+        return liquidationMath ;
     }
 
     async checkForLiquidation (pub : string) {    
-        let user = this.userMap.get(pub)
-        if (!this.liquidationGroup.has(pub)) {
-            if (user !== undefined) {
-                user = { ...user, ...this.getLiquidationMath(user) };
+        let user = this.userMap.get(pub);
+        
+        if (user !== undefined) {
+            if (!this.liquidationGroup.has(pub)) {
+                console.log(pub)
+                Object.keys(user.liquidationMath.marketLiquidationPrice).forEach(key => {
+                    console.log(Markets[Number(key)].symbol, user.positionsAccountData.positions[Number(key)].baseAssetAmount.div(BASE_PRECISION).toNumber(), (user.liquidationMath.marketLiquidationPrice[key] as BN).div(QUOTE_PRECISION).toNumber());
+                });
+                console.log('');
+                user.liquidationMath = this.getLiquidationMath(user)
                 this.userMap.set(user.publicKey, user);
-                if (user.totalCollateral.lte(slipLiq(user.partialMarginRequirement))) {
+                if (user.liquidationMath.totalCollateral.lte(slipLiq(user.liquidationMath.partialMarginRequirement))) {
                     try {
                         this.liquidationGroup.add(pub);
                         this.liquidate(user);
@@ -875,9 +1144,9 @@ class Liquidator {
                         console.error(error);
                     }
                 }
-            } else {
-                this.userMap.delete(pub);
             }
+        } else {
+            this.userMap.delete(pub);
         }
         
     }
@@ -892,16 +1161,14 @@ class Liquidator {
     wrapInTx(instruction: TransactionInstruction) : Transaction {
         return new Transaction().add(instruction);
     }
-    getLiquidationSize (user: User) {
-        user.totalPositionValue
-    }
     async liquidate(user: User) : Promise<void> {
         let instruction = user.liquidationInstruction
         if (instruction === undefined) {
             instruction = this.prepareUserLiquidationIX(user)
         }
         try {
-            console.log('trying to liquiate: ' + user.authority, user.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()), user.positionsAccountData.positions.length);
+            
+            console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.accountData.collateral.toNumber(), new Date(Date.now()), user.positionsAccountData.positions.length);
             let tx = this.wrapInTx(instruction);
             tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
             tx.feePayer = this.clearingHouse.wallet.publicKey;
@@ -918,8 +1185,6 @@ class Liquidator {
             } catch (error) {
                 this.prepareUserLiquidationIX(user);
             }
-            
-            
             
         } catch (error) {
             this.prepareUserLiquidationIX(user);
