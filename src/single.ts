@@ -379,20 +379,18 @@ class Liquidator {
                 let user = liquidator.userMap.get(liquidatee);
 
                 if (user === undefined) {
-                    return liquidator.liquidationGroup.delete(liquidatee);  
+                    liquidator.liquidationGroup.delete(liquidatee);  
+                } else {
+                    user.liquidationMath = this.getLiquidationMath(user)
+
+                    this.userMap.set(user.publicKey, user);
+
+                    if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage))) {
+                        liquidator.liquidationGroup.delete(liquidatee);
+                    } else {
+                        liquidator.liquidate(user);
+                    }
                 }
-
-                user.liquidationMath = this.getLiquidationMath(user)
-
-                this.userMap.set(user.publicKey, user);
-
-                if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage))) {
-                    return liquidator.liquidationGroup.delete(liquidatee);
-                }
-
-                liquidator.liquidate(user);
-                
-                
             });
 
         }.bind(this), liquidateEveryMS));
