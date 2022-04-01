@@ -68,7 +68,7 @@ const liquidateEveryMS = 5
 // essentially trying to frontrun the transaction
 const partialLiquidationSlippage = 2
 
-const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
+const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumber() * (1 + (percent/100)));
 
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
@@ -386,7 +386,7 @@ class Liquidator {
 
                 this.userMap.set(user.publicKey, user);
 
-                if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement))) {
+                if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage))) {
                     return liquidator.liquidationGroup.delete(liquidatee);
                 }
 
@@ -1104,7 +1104,7 @@ class Liquidator {
         if (user !== undefined) {
             if (!this.liquidationGroup.has(pub)) {
                 user.liquidationMath = this.getLiquidationMath(user)
-                const slip = slipLiq(user.liquidationMath.partialMarginRequirement);
+                const slip = slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage);
                 // console.log(pub)
                 // Object.keys(user.liquidationMath.marketLiquidationPrice).forEach(key => {
                 //     console.log(Markets[Number(key)].symbol, user.positionsAccountData.positions.find(position => position.marketIndex.toNumber() === Number(key)).baseAssetAmount.div(BASE_PRECISION).toNumber(), (user.liquidationMath.marketLiquidationPrice[key] as BN).div(QUOTE_PRECISION).toNumber());
@@ -1144,25 +1144,25 @@ class Liquidator {
             instruction = this.prepareUserLiquidationIX(user)
         }
         try {
-            
-            console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.liquidationMath.totalCollateral.toNumber(), user.liquidationMath.partialMarginRequirement.toNumber(), new Date(Date.now()));
-            let tx = this.wrapInTx(instruction);
-            tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
-            tx.feePayer = this.clearingHouse.wallet.publicKey;
-            tx = await this.clearingHouse.wallet.signTransaction(tx);
+            if (user.liquidationMath.totalCollateral.lt(slipLiq(user.liquidationMath.partialMarginRequirement, 1))) {
+                console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.liquidationMath.totalCollateral.toNumber(), user.liquidationMath.partialMarginRequirement.toNumber(), new Date(Date.now()));
+                let tx = this.wrapInTx(instruction);
+                tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
+                tx.feePayer = this.clearingHouse.wallet.publicKey;
+                tx = await this.clearingHouse.wallet.signTransaction(tx);
 
-            try {
-                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
-            } catch {
-                this.prepareUserLiquidationIX(user);
-            }
+                try {
+                    this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
+                } catch {
+                    this.prepareUserLiquidationIX(user);
+                }
 
-            try {
-                this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
-            } catch (error) {
-                this.prepareUserLiquidationIX(user);
+                try {
+                    this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
+                } catch (error) {
+                    this.prepareUserLiquidationIX(user);
+                }
             }
-            
         } catch (error) {
             this.prepareUserLiquidationIX(user);
         }
