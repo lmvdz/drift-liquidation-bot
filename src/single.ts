@@ -1071,11 +1071,8 @@ class Liquidator {
                 // add to total
                 liquidationMath.unrealizedPNL = liquidationMath.unrealizedPNL.add(liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()]);
 
-
-                // get liquidationPrice
-                const liquidationPrice = this.liquidationPrice(user, liquidationMath, this.clearingHouseData, position)
                 // store in per market object
-                liquidationMath.marketLiquidationPrice[position.marketIndex.toNumber()] = liquidationPrice;
+                liquidationMath.marketLiquidationPrice[position.marketIndex.toNumber()] = this.liquidationPrice(user, liquidationMath, this.clearingHouseData, position);
 
             } else {
                 console.log(user.accountData.positions.toBase58(), user.publicKey);
@@ -1116,7 +1113,7 @@ class Liquidator {
                 // console.log('');
                 
                 this.userMap.set(user.publicKey, user);
-                if (user.liquidationMath.totalCollateral.lte(slip)) {
+                if (user.liquidationMath.totalCollateral.lt(slip)) {
                     try {
                         this.liquidationGroup.add(pub);
                         this.liquidate(user);
