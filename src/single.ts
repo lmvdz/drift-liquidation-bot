@@ -1151,17 +1151,21 @@ class Liquidator {
                 tx.feePayer = this.clearingHouse.wallet.publicKey;
                 tx = await this.clearingHouse.wallet.signTransaction(tx);
 
+                // first send to rpc
+                try {
+                    this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
+                } catch (error) {
+                    this.prepareUserLiquidationIX(user);
+                }
+
+                // then to tpu
                 try {
                     this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
                 } catch {
                     this.prepareUserLiquidationIX(user);
                 }
 
-                try {
-                    this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
-                } catch (error) {
-                    this.prepareUserLiquidationIX(user);
-                }
+                
             }
         } catch (error) {
             this.prepareUserLiquidationIX(user);
