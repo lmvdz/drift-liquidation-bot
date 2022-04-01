@@ -66,7 +66,7 @@ const liquidateEveryMS = 5
 // unused
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
 // essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 3
+const partialLiquidationSlippage = 2
 
 const slipLiq = (marginRequirement) => new BN(marginRequirement.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
