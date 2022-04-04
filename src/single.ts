@@ -72,8 +72,8 @@ const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumbe
 
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
-const highPriorityLiquidationDistance = 1.5
-const mediumPriorityLiquidationDistance = 3
+const highPriorityLiquidationDistance = 5
+const mediumPriorityLiquidationDistance = 10
 
 interface User {
     publicKey: string,
