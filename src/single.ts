@@ -1142,28 +1142,24 @@ class Liquidator {
             instruction = this.prepareUserLiquidationIX(user)
         }
         try {
-            if (user.liquidationMath.totalCollateral.lt(slipLiq(user.liquidationMath.partialMarginRequirement, 1))) {
-                console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.liquidationMath.totalCollateral.toNumber(), user.liquidationMath.partialMarginRequirement.toNumber(), new Date(Date.now()));
-                let tx = this.wrapInTx(instruction);
-                tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
-                tx.feePayer = this.clearingHouse.wallet.publicKey;
-                tx = await this.clearingHouse.wallet.signTransaction(tx);
+            // console.log('trying to liquiate: ' + user.authority, user.liquidationMath.marginRatio.toNumber(), user.liquidationMath.totalCollateral.toNumber(), user.liquidationMath.partialMarginRequirement.toNumber(), new Date(Date.now()));
+            let tx = this.wrapInTx(instruction);
+            tx.recentBlockhash = (await this.tpuConnection.getRecentBlockhash()).blockhash;
+            tx.feePayer = this.clearingHouse.wallet.publicKey;
+            tx = await this.clearingHouse.wallet.signTransaction(tx);
 
-                // first send to rpc
-                try {
-                    this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
-                } catch (error) {
-                    this.prepareUserLiquidationIX(user);
-                }
+            // first send to rpc
+            try {
+                this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
+            } catch (error) {
+                this.prepareUserLiquidationIX(user);
+            }
 
-                // then to tpu
-                try {
-                    this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
-                } catch {
-                    this.prepareUserLiquidationIX(user);
-                }
-
-                
+            // then to tpu
+            try {
+                this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
+            } catch {
+                this.prepareUserLiquidationIX(user);
             }
         } catch (error) {
             this.prepareUserLiquidationIX(user);
