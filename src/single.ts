@@ -89,6 +89,10 @@ const liquidateEveryMS = 400;
 // how many liquidation tx can be sent per minute (counts tpc and tpu as two seperate tx's)
 const txLimitPerMinute = 2;
 
+// how many liquidation tx's can be sent for a user per minute
+// `txLimitPerMinute` supercedes this value
+const maxTxPerUserPerMinute = 20;
+
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
 const highPriorityLiquidationDistance = 5
@@ -97,6 +101,13 @@ const mediumPriorityLiquidationDistance = 10
 // the slippage of partial liquidation as a percentage --- 2 = 2% = 0.02 => when margin requirement reaches x * (1 + 0.02) = (x + (2% * x))
 // essentially trying to frontrun the transaction
 const partialLiquidationSlippage = 2
+
+
+/**
+ * 
+ *  END CONFIGURATION SECTION
+ * 
+ */
 
 // liquidation slippage calculation
 const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumber() * (1 + (percent/100)));
@@ -115,7 +126,7 @@ interface User {
     marginRatio: BN,
     prio: Priority,
     liquidationMath: LiquidationMath
-    
+    liquidationAttemptCount: number
 }
 
 type MarketBaseAssetAmounts = {
@@ -411,13 +422,18 @@ class Liquidator {
                 if (user === undefined) {
                     liquidator.liquidationGroup.delete(liquidatee);  
                 } else {
-                    user.liquidationMath = this.getLiquidationMath(user)
+                    user.liquidationMath = liquidator.getLiquidationMath(user)
 
-                    this.userMap.set(user.publicKey, user);
+                    if (user.liquidationAttemptCount === undefined) {
+                        user.liquidationAttemptCount = 0;
+                    }
+
+                    liquidator.userMap.set(user.publicKey, user);
 
                     if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage))) {
                         liquidator.liquidationGroup.delete(liquidatee);
-                    } else {
+                    } else if (user.liquidationAttemptCount < maxTxPerUserPerMinute) {
+                        user.liquidationAttemptCount++;
                         liquidator.liquidate(user);
                     }
                 }
@@ -429,8 +445,14 @@ class Liquidator {
         // reset the number of tx's sent per minute
         this.intervals.push(setInterval(async function() {
 
-            this.liquidationTxSent = 0;
-            this.liquidationLimitReachedMessageSent = false;
+            const liquidator = (this as Liquidator);
+
+            liquidator.liquidationTxSent = 0;
+            liquidator.liquidationLimitReachedMessageSent = false;
+
+            [...liquidator.userMap.keys()].forEach(async key => {
+                liquidator.userMap.set(key, { ...liquidator.userMap.get(key), liquidationAttemptCount: 0 })
+            });
 
         }.bind(this), 60 * 1000));
 
@@ -1185,7 +1207,6 @@ class Liquidator {
                 this.liquidationLimitReachedMessageSent = true;
                 console.log('TX limit reached')
             }
-            
             return;
         }
 
