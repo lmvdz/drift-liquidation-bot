@@ -62,7 +62,8 @@ const highPrioCheckUsersEveryMS = 100
 
 const liquidateEveryMS = 5
 
-const txLimitPerMinute = 1;
+// how many liquidation tx can be sent per minute (counts tpc and tpu as two seperate tx's)
+const txLimitPerMinute = 2;
 
 
 // unused
