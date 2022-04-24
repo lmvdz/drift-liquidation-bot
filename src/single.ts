@@ -62,6 +62,8 @@ const highPrioCheckUsersEveryMS = 100
 
 const liquidateEveryMS = 5
 
+const txLimitPerMinute = 1;
+
 
 // unused
 // the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
@@ -175,6 +177,7 @@ class Liquidator {
     highPriorityBucket: PollingAccountsFetcher
     clearingHouseSubscriber: PollingAccountsFetcher
     liquidationGroup: Set<string>
+    liquidationTxSent: number
     
 
     static async setupClearingHouseData(clearingHouse: ClearingHouse) {
@@ -395,6 +398,13 @@ class Liquidator {
 
         }.bind(this), liquidateEveryMS));
 
+
+        // reset the number of tx's sent per minute
+        this.intervals.push(setInterval(async function() {
+
+            this.liquidationTxSent = 0;
+
+        }.bind(this), 60 * 1000 * txLimitPerMinute));
 
 
         // check the highPriorityBucket every x seconds
@@ -1137,6 +1147,11 @@ class Liquidator {
         return new Transaction().add(instruction);
     }
     async liquidate(user: User) : Promise<void> {
+
+        if (this.liquidationTxSent > txLimitPerMinute) {
+            return;
+        }
+
         let instruction = user.liquidationInstruction
         if (instruction === undefined) {
             instruction = this.prepareUserLiquidationIX(user)
@@ -1151,6 +1166,7 @@ class Liquidator {
             // first send to rpc
             try {
                 this.tpuConnection.tpuClient.connection.sendRawTransaction(tx.serialize());
+                this.liquidationTxSent++;
             } catch (error) {
                 this.prepareUserLiquidationIX(user);
             }
@@ -1158,9 +1174,11 @@ class Liquidator {
             // then to tpu
             try {
                 this.tpuConnection.tpuClient.sendRawTransaction(tx.serialize()); 
+                this.liquidationTxSent++;
             } catch {
                 this.prepareUserLiquidationIX(user);
             }
+
         } catch (error) {
             this.prepareUserLiquidationIX(user);
         }
