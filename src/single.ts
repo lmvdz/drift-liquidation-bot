@@ -62,10 +62,18 @@ const lowPrioFetchInMintues = 30;
 // lower the better means more accurate mark price for markets
 const clearingHouseFetchInMinutes = 0.5;
 
+// grab user data from the ./storage/programUserAccounts folder and setup users which aren't in the bot's memory every x minutes
+const setupUsersInMinutes = 1
+
+// loop through all users and check if they need to be moved to a different priority group every x minutes
+const sortUsersInMinutes = 1
+
+// print out memory usage every x minutes
+const printMemUsageInMinutes = 1
+
 // how many minutes is considered one loop for the worker
 // console will be cleared and new table/chart data will be displayed
-const workerLoopTimeInMinutes = 1
-
+const printChartDataInMinutes = 1
 
 // check high priority every X ms
 const highPrioCheckUsersEveryMS = 100
@@ -367,13 +375,13 @@ class Liquidator {
         this.intervals.push(setInterval(async function(){
             const liquidator = (this as Liquidator);
             liquidator.setupUsers(liquidator.getUsers().map(u => u as User))
-        }.bind(this), 60 * 1000));
+        }.bind(this), 60 * 1000 * setupUsersInMinutes));
         
 
         this.intervals.push(setInterval(async function(){
             const liquidator = (this as Liquidator);
             liquidator.sortUsers();
-        }.bind(this), (60 * 1000)));
+        }.bind(this), (60 * 1000 * sortUsersInMinutes)));
 
         // get blockhashes of multiple rpcs every second
         // this.intervals.push(setInterval(async function(){
@@ -437,7 +445,7 @@ class Liquidator {
             // console.clear();
             console.log(`total mem usage: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`)
             // console.log(`low: ${lowPriorityBucket.getAllKeys().length}, medium: ${mediumPriorityBucket.getAllKeys().length}, high: ${highPriorityBucket.getAllKeys().length}`)
-        }.bind(this), 10 * 1000));
+        }.bind(this), 60 * 1000 * printMemUsageInMinutes));
 
 
         // print out the tables every x minutes
@@ -463,7 +471,7 @@ class Liquidator {
                 liquidator.checkTime = new Array<number>();
             })
 
-        }.bind(this), 60 * 1000 * workerLoopTimeInMinutes));
+        }.bind(this), 60 * 1000 * printChartDataInMinutes));
     }
 
     getEmptyPosition(marketIndex: BN) {
