@@ -178,7 +178,8 @@ class Liquidator {
     highPriorityBucket: PollingAccountsFetcher
     clearingHouseSubscriber: PollingAccountsFetcher
     liquidationGroup: Set<string>
-    liquidationTxSent: number
+    liquidationTxSent: number = 0
+    liquidationLimitReachedMessageSent: boolean = false
     
 
     static async setupClearingHouseData(clearingHouse: ClearingHouse) {
@@ -404,6 +405,7 @@ class Liquidator {
         this.intervals.push(setInterval(async function() {
 
             this.liquidationTxSent = 0;
+            this.liquidationLimitReachedMessageSent = false;
 
         }.bind(this), 60 * 1000 * txLimitPerMinute));
 
@@ -1150,6 +1152,11 @@ class Liquidator {
     async liquidate(user: User) : Promise<void> {
 
         if (this.liquidationTxSent > txLimitPerMinute) {
+            if (!this.liquidationLimitReachedMessageSent) {
+                this.liquidationLimitReachedMessageSent = true;
+                console.log('TX limit reached')
+            }
+            
             return;
         }
 
