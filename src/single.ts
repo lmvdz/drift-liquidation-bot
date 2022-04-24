@@ -47,13 +47,18 @@ import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 config({path: './.env.local'});
 
+
+/**
+ * 
+ * CONFIGURATION SECTION
+ * 
+ */
+
 // how often in minutes should the HIGH priority group of users be fetched
 const highPrioFetchInMinutes = 5;
 
-
 // how often in minutes should the MEDIUM priority group of users be fetched
 const mediumPrioFetchInMinutes = 15;
-
 
 // how often in minutes should the LOW priority group of users be fetched
 const lowPrioFetchInMintues = 30;
@@ -84,18 +89,19 @@ const liquidateEveryMS = 400;
 // how many liquidation tx can be sent per minute (counts tpc and tpu as two seperate tx's)
 const txLimitPerMinute = 2;
 
-
-// unused
-// the slippage of partial liquidation as a percentage --- 12 = 12% = 0.12 => when margin ratio reaches 625 * (1 + 0.12) = (700)
-// essentially trying to frontrun the transaction
-const partialLiquidationSlippage = 2
-
-const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumber() * (1 + (percent/100)));
-
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
 const highPriorityLiquidationDistance = 5
 const mediumPriorityLiquidationDistance = 10
+
+// the slippage of partial liquidation as a percentage --- 2 = 2% = 0.02 => when margin requirement reaches x * (1 + 0.02) = (x + (2% * x))
+// essentially trying to frontrun the transaction
+const partialLiquidationSlippage = 2
+
+// liquidation slippage calculation
+const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumber() * (1 + (percent/100)));
+
+
 
 interface User {
     publicKey: string,
