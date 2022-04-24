@@ -407,7 +407,7 @@ class Liquidator {
             this.liquidationTxSent = 0;
             this.liquidationLimitReachedMessageSent = false;
 
-        }.bind(this), 60 * 1000 * txLimitPerMinute));
+        }.bind(this), 60 * 1000));
 
 
         // check the highPriorityBucket every x seconds
