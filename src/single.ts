@@ -91,7 +91,7 @@ const txLimitPerMinute = 2;
 
 // how many liquidation tx's can be sent for a user per minute
 // `txLimitPerMinute` supercedes this value
-const maxTxPerUserPerMinute = 20;
+const maxLiquidationAttemptPerUserPerMinute = 20;
 
 // the liquidation distance determines which priority bucket the user will be a part of.
 // liquidation distance is totalCollateral / partialMarginRequirement
@@ -432,7 +432,7 @@ class Liquidator {
 
                     if (user.liquidationMath.totalCollateral.gt(slipLiq(user.liquidationMath.partialMarginRequirement, partialLiquidationSlippage))) {
                         liquidator.liquidationGroup.delete(liquidatee);
-                    } else if (user.liquidationAttemptCount < maxTxPerUserPerMinute) {
+                    } else if (user.liquidationAttemptCount < maxLiquidationAttemptPerUserPerMinute) {
                         user.liquidationAttemptCount++;
                         liquidator.liquidate(user);
                     }
