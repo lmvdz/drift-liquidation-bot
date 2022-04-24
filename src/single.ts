@@ -44,23 +44,34 @@ import { config } from 'dotenv';
 import { getLiquidationChart, getLiquidatorProfitTables, Liquidation, mapHistoryAccountToLiquidationsArray, updateLiquidatorMap } from './liqHistoryVisualizer.js';
 import { getTable } from './util/table.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { Program } from '@project-serum/anchor';
 
 config({path: './.env.local'});
 
-// how many minutes before users will be fetched from storage
-// the getUsersLoop.ts script will update the storage every minute
-const userUpdateTimeInMinutes = 2
+// how often in minutes should the HIGH priority group of users be fetched
+const highPrioFetchInMinutes = 5;
+
+
+// how often in minutes should the MEDIUM priority group of users be fetched
+const mediumPrioFetchInMinutes = 15;
+
+
+// how often in minutes should the LOW priority group of users be fetched
+const lowPrioFetchInMintues = 30;
+
+// how often in minutes should the clearingHouse be fetched
+// lower the better means more accurate mark price for markets
+const clearingHouseFetchInMinutes = 0.5;
 
 // how many minutes is considered one loop for the worker
 // console will be cleared and new table/chart data will be displayed
 const workerLoopTimeInMinutes = 1
 
 
-// check priority every X ms
+// check high priority every X ms
 const highPrioCheckUsersEveryMS = 100
 
-const liquidateEveryMS = 5
+// try to liquidate all liquidationGroup users every x MS
+const liquidateEveryMS = 400;
 
 // how many liquidation tx can be sent per minute (counts tpc and tpu as two seperate tx's)
 const txLimitPerMinute = 2;
@@ -287,17 +298,17 @@ class Liquidator {
         this.userMap = new Map<string, User>();
 
         // poll low priority accounts every 5 minutes
-        this.lowPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000);
+        this.lowPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000 * lowPrioFetchInMintues);
         this.accountSubscriberBucketMap.set(Priority.low, this.lowPriorityBucket)
 
         // poll medium priority accounts every minute
-        this.mediumPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 10 * 1000);
+        this.mediumPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000 * mediumPrioFetchInMinutes);
         this.accountSubscriberBucketMap.set(Priority.medium, this.mediumPriorityBucket)
 
-        this.highPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 5000);
+        this.highPriorityBucket = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000 * highPrioFetchInMinutes);
         this.accountSubscriberBucketMap.set(Priority.high, this.highPriorityBucket)
 
-        this.clearingHouseSubscriber = new PollingAccountsFetcher(process.env.RPC_URL, 500);
+        this.clearingHouseSubscriber = new PollingAccountsFetcher(process.env.RPC_URL, 60 * 1000 * clearingHouseFetchInMinutes);
 
         this.liquidationGroup = new Set<string>();
 
@@ -456,6 +467,7 @@ class Liquidator {
     }
 
     getEmptyPosition(marketIndex: BN) {
+
         return {
 			baseAssetAmount: ZERO,
 			lastCumulativeFundingRate: ZERO,
@@ -463,6 +475,7 @@ class Liquidator {
 			quoteAssetAmount: ZERO,
 			openOrders: ZERO,
 		};
+
     }
 
     getMaxLeverage(
@@ -863,9 +876,11 @@ class Liquidator {
         }
     }
     async sortUsers () {
+
         const users = [...this.userMap.values()];
         console.log('sorting ' + users.length + ' users');
         users.forEach(async user => this.sortUser(user));
+
     }
     async sortUser(user: User) {
         user.liquidationMath = this.getLiquidationMath(user)
