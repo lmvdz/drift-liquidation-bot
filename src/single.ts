@@ -34,7 +34,7 @@ import {
     calculateNewMarketAfterTrade,
     QUOTE_PRECISION,
     BASE_PRECISION,
-    calculateSettledPositionPNL
+    // calculateSettledPositionPNL
 } from '@drift-labs/sdk';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -1272,58 +1272,58 @@ class Liquidator {
         }
         
     }
-    getSettlementSettledPositionValue(settlement: Settlement, user: User): Settlement {
-        settlement = this.getSettlementSettledPositionsPNL(settlement, user)
-        settlement.totalSettledValue = user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(settlement.totalSettledPNL)
-        return settlement;
-    }
-    getSettledPositionValue(user: User): BN {
-        return user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(this.getSettledPositionsPNL(user));
-    }
-    getSettledPositionsPNL(user: User): BN {
-        return user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
-            const marketIndex = marketPosition.marketIndex.toNumber()
-            const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
-            return pnl.add(calculateSettledPositionPNL(market, marketPosition))
-        }, ZERO);
-    }
-    getSettlementSettledPositionsPNL(settlement: Settlement, user: User): Settlement {
-        settlement.totalSettledPNL = user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
-            const marketIndex = marketPosition.marketIndex.toNumber()
-            const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
-            settlement.markets[marketIndex] = {
-                settledPNL: ZERO,
-                uPNL: ZERO
-            }
-            settlement.markets[marketIndex].settledPNL = calculateSettledPositionPNL(market, marketPosition);
-            settlement.markets[marketIndex].uPNL = user.liquidationMath.marketUnrealizedPnL[marketIndex];
-            return pnl.add(settlement.markets[marketIndex].settledPNL)
-        }, ZERO)
-        return settlement;
-    }
-    getTotalSettlementSize(): BN {
-        return [...this.userMap.values()].reduce((collateralToBeSettled, user) => {
-            return collateralToBeSettled.add(user.accountData.forgoPositionSettlement === 0 ? this.getSettledPositionValue(user) : ZERO)
-        }, ZERO)
-    }
-    getSettlement(user: User): Settlement {
+    // getSettlementSettledPositionValue(settlement: Settlement, user: User): Settlement {
+    //     settlement = this.getSettlementSettledPositionsPNL(settlement, user)
+    //     settlement.totalSettledValue = user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(settlement.totalSettledPNL)
+    //     return settlement;
+    // }
+    // getSettledPositionValue(user: User): BN {
+    //     return user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(this.getSettledPositionsPNL(user));
+    // }
+    // getSettledPositionsPNL(user: User): BN {
+    //     return user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
+    //         const marketIndex = marketPosition.marketIndex.toNumber()
+    //         const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
+    //         return pnl.add(calculateSettledPositionPNL(market, marketPosition))
+    //     }, ZERO);
+    // }
+    // getSettlementSettledPositionsPNL(settlement: Settlement, user: User): Settlement {
+    //     settlement.totalSettledPNL = user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
+    //         const marketIndex = marketPosition.marketIndex.toNumber()
+    //         const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
+    //         settlement.markets[marketIndex] = {
+    //             settledPNL: ZERO,
+    //             uPNL: ZERO
+    //         }
+    //         settlement.markets[marketIndex].settledPNL = calculateSettledPositionPNL(market, marketPosition);
+    //         settlement.markets[marketIndex].uPNL = user.liquidationMath.marketUnrealizedPnL[marketIndex];
+    //         return pnl.add(settlement.markets[marketIndex].settledPNL)
+    //     }, ZERO)
+    //     return settlement;
+    // }
+    // getTotalSettlementSize(): BN {
+    //     return [...this.userMap.values()].reduce((collateralToBeSettled, user) => {
+    //         return collateralToBeSettled.add(user.accountData.forgoPositionSettlement === 0 ? this.getSettledPositionValue(user) : ZERO)
+    //     }, ZERO)
+    // }
+    // getSettlement(user: User): Settlement {
 
-        let settlement = {
-            collateral: user.accountData.collateral,
-            totalSettledValue: ZERO,
-            totalSettledPNL: ZERO,
-            estimatedClaimCollateral: ZERO,
-            markets: {} as MarketSettlement
-        } as Settlement
+    //     let settlement = {
+    //         collateral: user.accountData.collateral,
+    //         totalSettledValue: ZERO,
+    //         totalSettledPNL: ZERO,
+    //         estimatedClaimCollateral: ZERO,
+    //         markets: {} as MarketSettlement
+    //     } as Settlement
 
-		const totalClaimableCollateral = this.currentCollateralVaultBalance.add(
-			this.currentInsuranceVaultBalance
-		);
-		const totalEstimatedSettlementValue = this.totalSettlementSize;
-		settlement = this.getSettlementSettledPositionValue(settlement, user);
-        settlement.estimatedClaimCollateral = (totalClaimableCollateral.mul(settlement.totalSettledValue).div(totalEstimatedSettlementValue))
-		return settlement;
-    }
+	// 	const totalClaimableCollateral = this.currentCollateralVaultBalance.add(
+	// 		this.currentInsuranceVaultBalance
+	// 	);
+	// 	const totalEstimatedSettlementValue = this.totalSettlementSize;
+	// 	settlement = this.getSettlementSettledPositionValue(settlement, user);
+    //     settlement.estimatedClaimCollateral = (totalClaimableCollateral.mul(settlement.totalSettledValue).div(totalEstimatedSettlementValue))
+	// 	return settlement;
+    // }
     async checkBucket (bucket: PollingAccountsFetcher) {
         const start = process.hrtime();
         const keys = [...bucket.accounts.keys()];

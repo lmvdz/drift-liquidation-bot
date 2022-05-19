@@ -23,7 +23,7 @@
   },
   "license": "ISC",
   "dependencies": {
-    "@drift-labs/sdk": "file:../../protocol-v1/sdk",
+    "@drift-labs/sdk": "^0.1.36-master.6",
     "@project-serum/anchor": "^0.20.1",
     "@pythnetwork/client": "^2.5.1",
     "@solana/web3.js": "^1.31.0",
