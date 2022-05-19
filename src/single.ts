@@ -33,7 +33,8 @@ import {
     calculateTradeSlippage,
     calculateNewMarketAfterTrade,
     QUOTE_PRECISION,
-    BASE_PRECISION
+    BASE_PRECISION,
+    // calculateSettledPositionPNL
 } from '@drift-labs/sdk';
 import axios from 'axios';
 import { AccountMeta, Connection, ConnectionConfig, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -87,7 +88,7 @@ const highPrioCheckUsersEveryMS = 100
 const liquidateEveryMS = 400;
 
 // how many liquidation tx can be sent per minute (counts tpc and tpu as two seperate tx's)
-const txLimitPerMinute = 2;
+const txLimitPerMinute = 100;
 
 // how many liquidation tx's can be sent for a user per minute
 // `txLimitPerMinute` supercedes this value
@@ -111,8 +112,6 @@ const partialLiquidationSlippage = 2
 
 // liquidation slippage calculation
 const slipLiq = (marginRequirement, percent) => new BN(marginRequirement.toNumber() * (1 + (percent/100)));
-
-
 
 interface User {
     publicKey: string,
@@ -141,6 +140,10 @@ type MarketUnrealizedPnL = {
     [key: number]: BN
 }
 
+type MarketUnrealizedFundingPnL = {
+    [key: number]: BN
+}
+
 type MarketLiquidationPrice = {
     [key: number]: BN
 }
@@ -166,12 +169,14 @@ interface ClearingHouseData {
 interface LiquidationMath {
     totalPositionValue: BN, 
     unrealizedPNL: BN, 
+    unrealizedFundingPNL: BN,
     marginRatio: BN, 
     partialMarginRequirement: BN,
     totalCollateral: BN
     marketBaseAssetAmount: MarketBaseAssetAmounts
     marketMarginRequirement: MarketMarginRequirement
     marketUnrealizedPnL: MarketUnrealizedPnL
+    marketUnrealizedFundingPnL: MarketUnrealizedFundingPnL
     marketLiquidationPrice: MarketLiquidationPrice
 
 }
@@ -194,7 +199,19 @@ function flatDeep(arr : Array<any>, d = 1) : Array<any> {
     return d > 0 ? arr.reduce((acc, val) => acc.concat(Array.isArray(val) ? flatDeep(val, d - 1) : val), []) : arr.slice();
 }
 
-
+interface MarketSettlement {
+    [key: number]: {
+        uPNL: BN
+        settledPNL: BN
+    }
+}
+interface Settlement {
+    collateral: BN
+    totalSettledValue: BN
+    totalSettledPNL: BN
+    estimatedClaimCollateral: BN
+    markets: MarketSettlement
+}
 
 class Liquidator {
     intervals: Array<NodeJS.Timer> = [];
@@ -216,6 +233,10 @@ class Liquidator {
     liquidationGroup: Set<string>
     liquidationTxSent: number = 0
     liquidationLimitReachedMessageSent: boolean = false
+    currentCollateralVaultBalance: BN
+    currentInsuranceVaultBalance: BN
+    settlementClaimable: Map<string, Settlement> = new Map<string, Settlement>();
+    totalSettlementSize: BN
     
 
     static async setupClearingHouseData(clearingHouse: ClearingHouse) {
@@ -337,9 +358,51 @@ class Liquidator {
 
         this.liquidationGroup = new Set<string>();
 
+        let checkedSettlement = false;
+        let that = this as Liquidator;
         this.clearingHouseSubscriber.addProgram('state', this.clearingHouseData.state, this.clearingHouse.program as any, (data: StateAccount) => {
             // console.log('updated clearingHouse state');
-            this.clearingHouseData.stateAccount = data;
+            that.clearingHouseData.stateAccount = data;
+            // console.log('retrieving clearingHouse vault balances');
+            // that.clearingHouse.connection.getTokenAccountBalance(
+            //     that.clearingHouseData.stateAccount.collateralVault
+            // ).then(account => {
+            //     that.currentCollateralVaultBalance = new BN(account.value.amount);
+            //     that.clearingHouse.connection.getTokenAccountBalance(
+            //         that.clearingHouseData.stateAccount.insuranceVault
+            //     ).then(account => {
+            //         that.currentInsuranceVaultBalance = new BN(account.value.amount);
+            //         if (!checkedSettlement) {
+            //             checkedSettlement = true;
+            //             that.totalSettlementSize = that.getTotalSettlementSize();
+            //             Promise.allSettled([...that.userMap.values()].map((user) : Promise<void> => {
+            //                 return new Promise((resolve, reject) => {
+            //                     try {
+            //                         // console.log(user.accountData);
+            //                         const settlement = that.getSettlement(user);
+            //                         that.settlementClaimable.set(user.authority, settlement)
+            //                         // console.log(settlement)
+            //                         resolve();
+            //                     } catch (error) {
+            //                         console.error(error);
+            //                         reject(error);
+            //                     }
+            //                 })
+            //             })).then(() => {
+            //                 fs.writeFileSync('./claimable.json', JSON.stringify([...that.settlementClaimable.entries()].map(([authority, settlement]) => {
+            //                     let mappedValue = { authority: authority, collateral: settlement.collateral.toNumber()/(10**6), totalSettledValue: settlement.totalSettledValue.toNumber()/(10**6), estimatedClaimCollateral: settlement.estimatedClaimCollateral.toNumber()/(10**6) };
+            //                     Object.keys(settlement.markets).map(marketIndex => parseInt(marketIndex)).forEach(marketIndex => {
+            //                         let str = `${Markets.find(market => market.marketIndex.toNumber() === marketIndex).symbol}`;
+            //                         mappedValue[str + ' pnl'] = settlement.markets[marketIndex].uPNL.toNumber()/(10**6)
+            //                         mappedValue[str + ' settled pnl'] = settlement.markets[marketIndex].settledPNL.toNumber()/(10**6)
+            //                     });
+            //                     return mappedValue;
+            //                 }), null, 4))
+            //             })
+            //         }
+            //     })
+            // })
+            
         }, (error: any) => {
             console.error(error);
         });
@@ -813,6 +876,7 @@ class Liquidator {
         
     }
     async setupUsers (users: Array<User>) {
+        console.log('loading ' + users.length + ' users');
         let usersSetup = []
 
         usersSetup = chunkArray(await Promise.all(users.filter(u => !this.userMap.has(u.publicKey)).map(async (u, index) => {
@@ -1101,10 +1165,12 @@ class Liquidator {
             marginRatio: BN_MAX, 
             totalPositionValue: ZERO, 
             unrealizedPNL: ZERO, 
+            unrealizedFundingPNL: ZERO,
             partialMarginRequirement: ZERO, 
             marketBaseAssetAmount: {} as MarketBaseAssetAmounts, 
             marketMarginRequirement: {} as MarketMarginRequirement, 
             marketUnrealizedPnL: {} as MarketUnrealizedPnL,
+            marketUnrealizedFundingPnL: {} as MarketUnrealizedFundingPnL,
             marketLiquidationPrice: {} as MarketLiquidationPrice
         } as LiquidationMath
 
@@ -1114,27 +1180,44 @@ class Liquidator {
         }
     
         
-        positions.forEach(async position => {
-            const market = this.clearingHouseData.marketsAccount.markets[position.marketIndex.toNumber()];
+        positions.forEach(position => {
+            const marketIndex = position.marketIndex.toNumber();
+            const market = this.clearingHouseData.marketsAccount.markets[marketIndex];
             if (market !== undefined) {
-                // store in per market object
-                liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()] = calculateBaseAssetValue(market, position);
-                // add to total
-                liquidationMath.totalPositionValue = liquidationMath.totalPositionValue.add(liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()]);
+
+                // CALCULATE BASE ASSET VALUE
 
                 // store in per market object
-                liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()] = liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()].mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
+                liquidationMath.marketBaseAssetAmount[marketIndex] = calculateBaseAssetValue(market, position);
                 // add to total
-                liquidationMath.partialMarginRequirement = liquidationMath.partialMarginRequirement.add(liquidationMath.marketMarginRequirement[position.marketIndex.toNumber()]);
+                liquidationMath.totalPositionValue = liquidationMath.totalPositionValue.add(liquidationMath.marketBaseAssetAmount[marketIndex]);
+
+
+                // CALCULATE MARGIN REQUIREMENT
+
+                // store in per market object
+                liquidationMath.marketMarginRequirement[marketIndex] = liquidationMath.marketBaseAssetAmount[marketIndex].mul(new BN(market.marginRatioPartial)).div(MARGIN_PRECISION);
+                // add to total
+                liquidationMath.partialMarginRequirement = liquidationMath.partialMarginRequirement.add(liquidationMath.marketMarginRequirement[marketIndex]);
                 
+                // CALCULATE UNREALIZED PNL
 
                 // store in per market object
-                liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()] = this.calculatePositionPNL(market, position, liquidationMath.marketBaseAssetAmount[position.marketIndex.toNumber()], true)
+                liquidationMath.marketUnrealizedPnL[marketIndex] = this.calculatePositionPNL(market, position, liquidationMath.marketBaseAssetAmount[marketIndex], true)
                 // add to total
-                liquidationMath.unrealizedPNL = liquidationMath.unrealizedPNL.add(liquidationMath.marketUnrealizedPnL[position.marketIndex.toNumber()]);
+                liquidationMath.unrealizedPNL = liquidationMath.unrealizedPNL.add(liquidationMath.marketUnrealizedPnL[marketIndex]);
+
+
+                // CALCULATE UNREALIZED FUNDING PNL
 
                 // store in per market object
-                liquidationMath.marketLiquidationPrice[position.marketIndex.toNumber()] = this.liquidationPrice(user, liquidationMath, this.clearingHouseData, position);
+                liquidationMath.marketUnrealizedFundingPnL[marketIndex] = calculatePositionFundingPNL(market, position)
+                // add to total
+                liquidationMath.unrealizedFundingPNL = liquidationMath.unrealizedFundingPNL.add(liquidationMath.marketUnrealizedFundingPnL[marketIndex]);
+
+
+                // store in per market object
+                liquidationMath.marketLiquidationPrice[marketIndex] = this.liquidationPrice(user, liquidationMath, this.clearingHouseData, position);
 
             } else {
                 console.log(user.accountData.positions.toBase58(), user.publicKey);
@@ -1189,6 +1272,58 @@ class Liquidator {
         }
         
     }
+    // getSettlementSettledPositionValue(settlement: Settlement, user: User): Settlement {
+    //     settlement = this.getSettlementSettledPositionsPNL(settlement, user)
+    //     settlement.totalSettledValue = user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(settlement.totalSettledPNL)
+    //     return settlement;
+    // }
+    // getSettledPositionValue(user: User): BN {
+    //     return user.accountData.collateral.add(user.liquidationMath.unrealizedFundingPNL.div(PRICE_TO_QUOTE_PRECISION)).add(this.getSettledPositionsPNL(user));
+    // }
+    // getSettledPositionsPNL(user: User): BN {
+    //     return user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
+    //         const marketIndex = marketPosition.marketIndex.toNumber()
+    //         const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
+    //         return pnl.add(calculateSettledPositionPNL(market, marketPosition))
+    //     }, ZERO);
+    // }
+    // getSettlementSettledPositionsPNL(settlement: Settlement, user: User): Settlement {
+    //     settlement.totalSettledPNL = user.positionsAccountData.positions.reduce((pnl, marketPosition) => {
+    //         const marketIndex = marketPosition.marketIndex.toNumber()
+    //         const market = this.clearingHouseData.marketsAccount.markets[marketIndex]
+    //         settlement.markets[marketIndex] = {
+    //             settledPNL: ZERO,
+    //             uPNL: ZERO
+    //         }
+    //         settlement.markets[marketIndex].settledPNL = calculateSettledPositionPNL(market, marketPosition);
+    //         settlement.markets[marketIndex].uPNL = user.liquidationMath.marketUnrealizedPnL[marketIndex];
+    //         return pnl.add(settlement.markets[marketIndex].settledPNL)
+    //     }, ZERO)
+    //     return settlement;
+    // }
+    // getTotalSettlementSize(): BN {
+    //     return [...this.userMap.values()].reduce((collateralToBeSettled, user) => {
+    //         return collateralToBeSettled.add(user.accountData.forgoPositionSettlement === 0 ? this.getSettledPositionValue(user) : ZERO)
+    //     }, ZERO)
+    // }
+    // getSettlement(user: User): Settlement {
+
+    //     let settlement = {
+    //         collateral: user.accountData.collateral,
+    //         totalSettledValue: ZERO,
+    //         totalSettledPNL: ZERO,
+    //         estimatedClaimCollateral: ZERO,
+    //         markets: {} as MarketSettlement
+    //     } as Settlement
+
+	// 	const totalClaimableCollateral = this.currentCollateralVaultBalance.add(
+	// 		this.currentInsuranceVaultBalance
+	// 	);
+	// 	const totalEstimatedSettlementValue = this.totalSettlementSize;
+	// 	settlement = this.getSettlementSettledPositionValue(settlement, user);
+    //     settlement.estimatedClaimCollateral = (totalClaimableCollateral.mul(settlement.totalSettledValue).div(totalEstimatedSettlementValue))
+	// 	return settlement;
+    // }
     async checkBucket (bucket: PollingAccountsFetcher) {
         const start = process.hrtime();
         const keys = [...bucket.accounts.keys()];
