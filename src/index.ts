@@ -19,7 +19,7 @@ import {
 import { 
     Markets, UserPositionsAccount, 
 } from '@drift-labs/sdk';
-import { TpuConnection } from './tpuClient.js';
+import { TpuConnection } from 'tpu-client';
 import { Connection, ConnectionConfig, PublicKey, Transaction } from '@solana/web3.js';
 
 

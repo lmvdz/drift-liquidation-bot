@@ -11,20 +11,20 @@ import {
     calculatePositionFundingPNL,
     ClearingHouse,
     Market,
-    PARTIAL_LIQUIDATION_RATIO,
+    // PARTIAL_LIQUIDATION_RATIO,
     PRICE_TO_QUOTE_PRECISION,
     TEN_THOUSAND,
     UserAccount,
     UserPosition,
     ZERO,
     BN,
-    PollingAccountSubscriber,
+    // PollingAccountsFetcher,
     UserPositionsAccount,
     getUserAccountPublicKey,
     getClearingHouseUser,
     getWebSocketClearingHouseUserConfig
 } from '@drift-labs/sdk';
-
+import { PollingAccountsFetcher } from 'polling-account-fetcher';
 
 
 import { config } from 'dotenv';
@@ -32,6 +32,7 @@ config({path: './.env.local'});
 
 // used to store the data, uses the same api calls as window.localStorage but works with nodejs
 import { Transaction,TransactionInstruction } from '@solana/web3.js';
+import { Idl, Program } from '@project-serum/anchor';
 
 const wrapInTx = (instruction: TransactionInstruction) : Transaction  => {
 	return new Transaction().add(instruction);
@@ -139,7 +140,7 @@ const prepareLiquidationIX = (userPub: string, userAccountPub : PublicKey) : Pro
 // if the margin ratio is less than the liquidation ratio just return 1 to move it to the front of the liquidation distance array
 // divide the margin ratio by the partial liquidation ratio to get the distance to liquidation for the user
 // use div and mod to get the decimal values
-
+const PARTIAL_LIQUIDATION_RATIO = new BN(0);
 const slipLiq = new BN(PARTIAL_LIQUIDATION_RATIO.toNumber() * (1 + (partialLiquidationSlippage/100)));
 
 
@@ -212,9 +213,9 @@ const checkForLiquidation = (pub : string) => {
         liquidate(user);
 }
 
-const checkBucket = (bucket: PollingAccountSubscriber) => {
+const checkBucket = (bucket: PollingAccountsFetcher) => {
     const start = process.hrtime();
-    const keys = bucket.getAllKeys();
+    const keys = [...bucket.accounts.keys()];
     keys.forEach(async key => checkForLiquidation(key))
     numUsersChecked.push(keys.length)
     const time = process.hrtime(start);
@@ -271,9 +272,9 @@ const startWorker = () => {
                         data: {
                             userCount: userMap.size,
                             prio: {
-                                high: highPriorityBucket.getAllKeys().length,
-                                medium: mediumPriorityBucket.getAllKeys().length,
-                                low: lowPriorityBucket.getAllKeys().length
+                                high: [...highPriorityBucket.accounts.keys()].length,
+                                medium: [...mediumPriorityBucket.accounts.keys()].length,
+                                low: [...lowPriorityBucket.accounts.keys()].length
                             },
                             intervalCount: intervalCount,
                             checked: numUsersChecked,
@@ -327,7 +328,7 @@ enum Priority {
     'low'
 }
 
-const accountSubscriberBucketMap : Map<Priority, PollingAccountSubscriber> = new Map<Priority, PollingAccountSubscriber>();
+const accountSubscriberBucketMap : Map<Priority, PollingAccountsFetcher> = new Map<Priority, PollingAccountsFetcher>();
 const userMap : Map<string, User> = new Map<string, User>();
 
 const getPrio = (user : User) => {
@@ -341,20 +342,22 @@ const sortUser = async (user: User) => {
     console.log(currentPrio, newPrio)
     if (currentPrio !== newPrio) {
         if (currentPrio !== undefined) 
-        accountSubscriberBucketMap.get(currentPrio).removeAccountsToPoll(user.publicKey);
+        accountSubscriberBucketMap.get(currentPrio).accounts.delete(user.publicKey);
 
         userMap.set(user.publicKey, { ...user, prio: newPrio})
 
         const newPrioBucket = accountSubscriberBucketMap.get(newPrio);
 
-        newPrioBucket.addAccountToPoll(user.publicKey, 'user', user.publicKey, (data: UserAccount) => {
+        newPrioBucket.addProgram('user', user.publicKey, clearingHouse.program as any, (data: UserAccount) => {
             console.log('updated user', 'account data', user.publicKey, newPrio)
             let newData = { ...userMap.get(user.publicKey), accountData: data } as User
             userMap.set(user.publicKey, newData);
             sortUser(newData);
+        }, (error) => {
+            newPrioBucket.accounts.delete(user.positions)
         });
 
-        newPrioBucket.addAccountToPoll(user.publicKey, 'userPositions', user.positions, (data: UserPositionsAccount) => {
+        newPrioBucket.addProgram('userPositions', user.positions, clearingHouse.program as any, (data: UserPositionsAccount) => {
             // console.log(data);
             console.log('updated user', 'positions data', user.publicKey, newPrio)
             let oldData = userMap.get(user.publicKey);
@@ -363,6 +366,8 @@ const sortUser = async (user: User) => {
             // newData.liquidationInstruction = await prepareUserLiquidationIX(newData);
             userMap.set(user.publicKey, newData);
             sortUser(newData);
+        }, (error) => {
+            newPrioBucket.accounts.delete(user.positions)
         });
 
     }
@@ -472,9 +477,9 @@ const setupUser = async (u : User) => {
         console.log('setting up users');
         setupUsers(usersToSetup).then(() => {
             usersToSetup = []
-            lowPriorityBucket.subscribe();
-            mediumPriorityBucket.subscribe();
-            highPriorityBucket.subscribe();
+            lowPriorityBucket.start();
+            mediumPriorityBucket.start();
+            highPriorityBucket.start();
         });
     }, 5000)
 }
@@ -492,13 +497,13 @@ process.on('message', (data : MessageData) => {
 
 clearingHouse = _.createClearingHouse(workerConnection)
 
-const lowPriorityBucket = new PollingAccountSubscriber('low prio', clearingHouse.program, workerIndex, 60 * 1000);
+const lowPriorityBucket = new PollingAccountsFetcher(clearingHouse.connection.rpcEndpoint, 60 * 1000);
 accountSubscriberBucketMap.set(Priority.low, lowPriorityBucket)
 
-const mediumPriorityBucket = new PollingAccountSubscriber('medium prio',clearingHouse.program, workerIndex, 30 * 1000);
+const mediumPriorityBucket = new PollingAccountsFetcher(clearingHouse.connection.rpcEndpoint, 30 * 1000);
 accountSubscriberBucketMap.set(Priority.medium, mediumPriorityBucket)
 
-const highPriorityBucket = new PollingAccountSubscriber('high prio',clearingHouse.program, workerIndex, 10 * 1000);
+const highPriorityBucket = new PollingAccountsFetcher(clearingHouse.connection.rpcEndpoint, 10 * 1000);
 accountSubscriberBucketMap.set(Priority.high, highPriorityBucket)
 
 const subAndStartWorker = () => {
