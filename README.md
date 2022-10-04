@@ -6,7 +6,7 @@
 > Splits users into prioritized buckets based on margin ratio.  
 > Attempts to frontrun the liquidation by sending the tx's before the user is actually liquidatable to account for delay between sending the tx and checking the user's marign ratio on chain.  
 
-### the protocol-v1 is my fork [lmvdz/protocol-v1](https://github.com/lmvdz/protocol-v1/tree/barebones-polling-account)
+# this bot no longer works because Drift v1 has been sunsetted.
 
 ### Checkout [Drift Protocol](https://docs.drift.trade/) for more information!
 
